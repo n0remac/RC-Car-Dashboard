@@ -30,51 +30,23 @@ static const int SCREEN_H = 135;
 // ----------------------
 static const int SDA_PIN = 21;
 static const int SCL_PIN = 22;
-static const int SCREEN_BUTTON_PIN = 35;
 static const uint8_t BME_ADDRESS_PRIMARY = 0x76;
 static const uint8_t BME_ADDRESS_SECONDARY = 0x77;
 static const float BME_SEA_LEVEL_HPA = 1013.25f;
 
 // ----------------------
-// App state
-// ----------------------
-enum ScreenMode {
-  SCREEN_GAUGE,
-  SCREEN_STATUS,
-  SCREEN_ENVIRONMENT,
-  SCREEN_TILT
-};
-
-ScreenMode currentScreen = SCREEN_GAUGE;
-
-// ----------------------
 // Gauge state
 // ----------------------
-static const int CX = 120;
-static const int CY = 115;
-static const int R_OUTER = 60;
-static const int R_INNER = 52;
-static const int R_NEEDLE = 45;
-static const float START_DEG = 200.0f;
-static const float END_DEG = 340.0f;
-
-float needleValue = 0.0f;
-float needleStep = 0.01f;
+float dashboardRpmK = 2.6f;
+float dashboardMph = 42.0f;
+float dashboardFuelLevel = 0.16f;
+bool dashboardHeadlightsOn = true;
+int dashboardGearIndex = 3;
+String dashboardOdometer = "000000";
 
 unsigned long lastBlinkToggle = 0;
 bool warningOn = true;
 const unsigned long BLINK_INTERVAL_MS = 500;
-bool lastScreenButtonState = HIGH;
-unsigned long lastButtonChangeMs = 0;
-const unsigned long BUTTON_DEBOUNCE_MS = 150;
-
-// ----------------------
-// Status screen data
-// ----------------------
-int batteryPercent = 87;
-float distanceMiles = 12.4f;
-unsigned long lastStatusUpdate = 0;
-const unsigned long STATUS_INTERVAL_MS = 300;
 
 // ----------------------
 // Environment sensor data
@@ -111,14 +83,6 @@ bool invertRollAxis = true;
 bool showTiltAxisLabels = false;
 float tiltBubbleToleranceDeg = 1.0f;
 
-float speedMps = 0.0f;
-float speedMph = 0.0f;
-
-float accelBiasX = 0.0f;
-float accelBiasY = 0.0f;
-float accelBiasZ = 0.0f;
-
-unsigned long lastIMUUpdateMs = 0;
 unsigned long lastTiltRender = 0;
 const unsigned long TILT_RENDER_INTERVAL_MS = 50;
 
@@ -130,21 +94,14 @@ void handleRoot();
 void handleSet();
 
 void renderGaugeScreen(TFT_eSprite &s);
-void renderStatusScreen(TFT_eSprite &s);
-void renderEnvironmentScreen(TFT_eSprite &s);
-void renderTiltScreen(TFT_eSprite &s);
 
 bool initBME280();
-void calibrateIMU();
 void updateEnvironment();
 void updateIMU();
 void renderCurrentScreen();
-void cycleScreen();
-void handleScreenButton();
 void applyTiltOrientation();
 void resetTiltReference();
 String bmeAddressLabel();
-String screenModeName();
 String tiltOrientationName();
 String onOffLabel(bool enabled);
 uint16_t rgb565(uint8_t r, uint8_t g, uint8_t b);
@@ -176,19 +133,6 @@ float clamp01(float value) {
 
 uint16_t rgb565(uint8_t r, uint8_t g, uint8_t b) {
   return ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
-}
-
-String screenModeName() {
-  if (currentScreen == SCREEN_STATUS) {
-    return "Status";
-  }
-  if (currentScreen == SCREEN_ENVIRONMENT) {
-    return "Environment";
-  }
-  if (currentScreen == SCREEN_TILT) {
-    return "Tilt";
-  }
-  return "Gauge";
 }
 
 String bmeAddressLabel() {
@@ -234,41 +178,7 @@ void updateEnvironment() {
   environmentAltitudeM = altitudeM;
 }
 
-void calibrateIMU() {
-  const int samples = 100;
-  float sumX = 0.0f;
-  float sumY = 0.0f;
-  float sumZ = 0.0f;
-
-  for (int i = 0; i < samples; i++) {
-    float tx = 0.0f;
-    float ty = 0.0f;
-    float tz = 0.0f;
-
-    while (!IMU.accelerationAvailable()) {
-      delay(5);
-    }
-
-    IMU.readAcceleration(tx, ty, tz);
-    sumX += tx;
-    sumY += ty;
-    sumZ += tz;
-    delay(10);
-  }
-
-  accelBiasX = sumX / samples;
-  accelBiasY = sumY / samples;
-  accelBiasZ = sumZ / samples;
-}
-
 void updateIMU() {
-  unsigned long now = millis();
-  float dt = (now - lastIMUUpdateMs) / 1000.0f;
-  if (dt <= 0.0f) {
-    dt = 0.01f;
-  }
-  lastIMUUpdateMs = now;
-
   if (IMU.accelerationAvailable()) {
     IMU.readAcceleration(ax, ay, az);
   }
@@ -280,23 +190,6 @@ void updateIMU() {
   rawRollDeg = atan2(ay, az) * 180.0f / PI;
   rawPitchDeg = atan2(-ax, sqrt((ay * ay) + (az * az))) * 180.0f / PI;
   applyTiltOrientation();
-
-  float forwardAccel = ax - accelBiasX;
-  if (fabs(forwardAccel) < 0.03f) {
-    forwardAccel = 0.0f;
-  }
-
-  speedMps += forwardAccel * 9.80665f * dt;
-
-  if (fabs(speedMps) < 0.05f) {
-    speedMps = 0.0f;
-  }
-
-  if (speedMps < 0.0f) {
-    speedMps = 0.0f;
-  }
-
-  speedMph = speedMps * 2.23694f;
 }
 
 void applyTiltOrientation() {
@@ -367,45 +260,8 @@ String onOffLabel(bool enabled) {
 // Rendering
 // ----------------------
 void renderCurrentScreen() {
-  if (currentScreen == SCREEN_GAUGE) {
-    renderGaugeScreen(spr);
-  } else if (currentScreen == SCREEN_STATUS) {
-    renderStatusScreen(spr);
-  } else if (currentScreen == SCREEN_ENVIRONMENT) {
-    renderEnvironmentScreen(spr);
-  } else {
-    renderTiltScreen(spr);
-  }
-
+  renderGaugeScreen(spr);
   spr.pushSprite(0, 0);
-}
-
-void cycleScreen() {
-  if (currentScreen == SCREEN_GAUGE) {
-    currentScreen = SCREEN_STATUS;
-  } else if (currentScreen == SCREEN_STATUS) {
-    currentScreen = SCREEN_ENVIRONMENT;
-  } else if (currentScreen == SCREEN_ENVIRONMENT) {
-    currentScreen = SCREEN_TILT;
-  } else {
-    currentScreen = SCREEN_GAUGE;
-  }
-
-  renderCurrentScreen();
-}
-
-void handleScreenButton() {
-  bool pressed = digitalRead(SCREEN_BUTTON_PIN) == LOW;
-  unsigned long now = millis();
-
-  if (pressed != lastScreenButtonState && (now - lastButtonChangeMs) >= BUTTON_DEBOUNCE_MS) {
-    lastButtonChangeMs = now;
-    lastScreenButtonState = pressed;
-
-    if (pressed) {
-      cycleScreen();
-    }
-  }
 }
 
 // ----------------------
@@ -414,8 +270,6 @@ void handleScreenButton() {
 void setup() {
   pinMode(4, OUTPUT);
   digitalWrite(4, HIGH);
-  pinMode(SCREEN_BUTTON_PIN, INPUT);
-  lastScreenButtonState = digitalRead(SCREEN_BUTTON_PIN) == LOW;
 
   Serial.begin(115200);
 
@@ -458,9 +312,6 @@ void setup() {
     Serial.println("BME280 not detected on 0x76 or 0x77");
   }
 
-  calibrateIMU();
-  lastIMUUpdateMs = millis();
-
   server.on("/", handleRoot);
   server.on("/set", handleSet);
   server.begin();
@@ -470,7 +321,6 @@ void setup() {
 
 void loop() {
   server.handleClient();
-  handleScreenButton();
   updateIMU();
 
   unsigned long now = millis();
@@ -478,56 +328,11 @@ void loop() {
   if ((now - lastEnvironmentUpdate) >= ENVIRONMENT_INTERVAL_MS) {
     lastEnvironmentUpdate = now;
     updateEnvironment();
-
-    if (currentScreen == SCREEN_ENVIRONMENT) {
-      renderCurrentScreen();
-    }
   }
 
-  if (currentScreen == SCREEN_GAUGE) {
-    if (now - lastBlinkToggle >= BLINK_INTERVAL_MS) {
-      lastBlinkToggle = now;
-      warningOn = !warningOn;
-    }
-
-    needleValue += needleStep;
-    if (needleValue >= 1.0f) {
-      needleValue = 1.0f;
-      needleStep = -needleStep;
-    } else if (needleValue <= 0.0f) {
-      needleValue = 0.0f;
-      needleStep = -needleStep;
-    }
-
-    renderCurrentScreen();
-    delay(30);
-    return;
-  }
-
-  if (currentScreen == SCREEN_STATUS) {
-    if (now - lastStatusUpdate >= STATUS_INTERVAL_MS) {
-      lastStatusUpdate = now;
-
-      batteryPercent--;
-      if (batteryPercent < 12) {
-        batteryPercent = 87;
-      }
-
-      distanceMiles += 0.1f;
-      if (distanceMiles > 99.9f) {
-        distanceMiles = 0.0f;
-      }
-
-      renderCurrentScreen();
-    }
-
-    delay(20);
-    return;
-  }
-
-  if (currentScreen == SCREEN_ENVIRONMENT) {
-    delay(20);
-    return;
+  if (now - lastBlinkToggle >= BLINK_INTERVAL_MS) {
+    lastBlinkToggle = now;
+    warningOn = !warningOn;
   }
 
   if (now - lastTiltRender >= TILT_RENDER_INTERVAL_MS) {
