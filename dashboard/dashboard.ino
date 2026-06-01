@@ -38,7 +38,7 @@ static const float BME_SEA_LEVEL_HPA = 1013.25f;
 // Gauge state
 // ----------------------
 float dashboardRpmK = 2.6f;
-float dashboardMph = 42.0f;
+float dashboardMph = 0.0f;
 float dashboardFuelLevel = 0.16f;
 bool dashboardHeadlightsOn = true;
 int dashboardGearIndex = 3;
@@ -64,6 +64,7 @@ const unsigned long ENVIRONMENT_INTERVAL_MS = 1000;
 // ----------------------
 // Tilt / IMU state
 // ----------------------
+bool imuAvailable = false;
 float ax = 0.0f;
 float ay = 0.0f;
 float az = 0.0f;
@@ -75,6 +76,8 @@ float rawPitchDeg = 0.0f;
 float rawRollDeg = 0.0f;
 float pitchDeg = 0.0f;
 float rollDeg = 0.0f;
+float orientedPitchDeg = 0.0f;
+float orientedRollDeg = 0.0f;
 int tiltOrientationDeg = 0;
 float pitchZeroDeg = 0.0f;
 float rollZeroDeg = 0.0f;
@@ -82,6 +85,8 @@ bool invertPitchAxis = false;
 bool invertRollAxis = true;
 bool showTiltAxisLabels = false;
 float tiltBubbleToleranceDeg = 1.0f;
+float longitudinalAxisAccelG = 0.0f;
+unsigned long lastLongitudinalAccelSampleMs = 0;
 
 unsigned long lastTiltRender = 0;
 const unsigned long TILT_RENDER_INTERVAL_MS = 50;
@@ -94,6 +99,11 @@ void handleRoot();
 void handleSet();
 
 void renderGaugeScreen(TFT_eSprite &s);
+
+void initGps();
+void updateGps();
+void updateSpeedFusion();
+void resetSpeedFusion();
 
 bool initBME280();
 void updateEnvironment();
@@ -133,6 +143,20 @@ float clamp01(float value) {
 
 uint16_t rgb565(uint8_t r, uint8_t g, uint8_t b) {
   return ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
+}
+
+float readLongitudinalAxisAccelG() {
+  if (tiltOrientationDeg == 90) {
+    return ay;
+  }
+  if (tiltOrientationDeg == 180) {
+    return ax;
+  }
+  if (tiltOrientationDeg == 270) {
+    return -ay;
+  }
+
+  return -ax;
 }
 
 String bmeAddressLabel() {
@@ -179,8 +203,15 @@ void updateEnvironment() {
 }
 
 void updateIMU() {
+  if (!imuAvailable) {
+    return;
+  }
+
+  bool accelerationUpdated = false;
+
   if (IMU.accelerationAvailable()) {
     IMU.readAcceleration(ax, ay, az);
+    accelerationUpdated = true;
   }
 
   if (IMU.gyroscopeAvailable()) {
@@ -190,25 +221,30 @@ void updateIMU() {
   rawRollDeg = atan2(ay, az) * 180.0f / PI;
   rawPitchDeg = atan2(-ax, sqrt((ay * ay) + (az * az))) * 180.0f / PI;
   applyTiltOrientation();
+
+  if (accelerationUpdated) {
+    longitudinalAxisAccelG = readLongitudinalAxisAccelG();
+    lastLongitudinalAccelSampleMs = millis();
+  }
 }
 
 void applyTiltOrientation() {
-  float orientedPitch = rawPitchDeg;
-  float orientedRoll = rawRollDeg;
+  orientedPitchDeg = rawPitchDeg;
+  orientedRollDeg = rawRollDeg;
 
   if (tiltOrientationDeg == 90) {
-    orientedPitch = rawRollDeg;
-    orientedRoll = -rawPitchDeg;
+    orientedPitchDeg = rawRollDeg;
+    orientedRollDeg = -rawPitchDeg;
   } else if (tiltOrientationDeg == 180) {
-    orientedPitch = -rawPitchDeg;
-    orientedRoll = -rawRollDeg;
+    orientedPitchDeg = -rawPitchDeg;
+    orientedRollDeg = -rawRollDeg;
   } else if (tiltOrientationDeg == 270) {
-    orientedPitch = -rawRollDeg;
-    orientedRoll = rawPitchDeg;
+    orientedPitchDeg = -rawRollDeg;
+    orientedRollDeg = rawPitchDeg;
   }
 
-  pitchDeg = orientedPitch - pitchZeroDeg;
-  rollDeg = orientedRoll - rollZeroDeg;
+  pitchDeg = orientedPitchDeg - pitchZeroDeg;
+  rollDeg = orientedRollDeg - rollZeroDeg;
 
   if (invertPitchAxis) {
     pitchDeg = -pitchDeg;
@@ -226,22 +262,8 @@ void applyTiltOrientation() {
 }
 
 void resetTiltReference() {
-  float orientedPitch = rawPitchDeg;
-  float orientedRoll = rawRollDeg;
-
-  if (tiltOrientationDeg == 90) {
-    orientedPitch = rawRollDeg;
-    orientedRoll = -rawPitchDeg;
-  } else if (tiltOrientationDeg == 180) {
-    orientedPitch = -rawPitchDeg;
-    orientedRoll = -rawRollDeg;
-  } else if (tiltOrientationDeg == 270) {
-    orientedPitch = -rawRollDeg;
-    orientedRoll = rawPitchDeg;
-  }
-
-  pitchZeroDeg = orientedPitch;
-  rollZeroDeg = orientedRoll;
+  pitchZeroDeg = orientedPitchDeg;
+  rollZeroDeg = orientedRollDeg;
   applyTiltOrientation();
 }
 
@@ -289,17 +311,12 @@ void setup() {
 
   Wire.begin(SDA_PIN, SCL_PIN);
 
-  if (!IMU.begin()) {
-    spr.fillSprite(TFT_BLACK);
-    spr.setTextColor(TFT_RED, TFT_BLACK);
-    spr.setTextDatum(TL_DATUM);
-    spr.drawString("IMU init failed", 10, 20, 2);
-    spr.drawString("Check wiring", 10, 45, 2);
-    spr.pushSprite(0, 0);
-
-    while (true) {
-      delay(1000);
-    }
+  imuAvailable = IMU.begin();
+  if (imuAvailable) {
+    Serial.println("IMU online");
+    updateIMU();
+  } else {
+    Serial.println("IMU not detected; continuing without tilt/accel data");
   }
 
   bmeAvailable = initBME280();
@@ -312,6 +329,8 @@ void setup() {
     Serial.println("BME280 not detected on 0x76 or 0x77");
   }
 
+  initGps();
+
   server.on("/", handleRoot);
   server.on("/set", handleSet);
   server.begin();
@@ -321,7 +340,9 @@ void setup() {
 
 void loop() {
   server.handleClient();
+  updateGps();
   updateIMU();
+  updateSpeedFusion();
 
   unsigned long now = millis();
 

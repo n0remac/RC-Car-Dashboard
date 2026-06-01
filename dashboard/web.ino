@@ -1,5 +1,6 @@
 String htmlPage() {
   String environmentSensor = bmeAvailable ? String("Online (") + bmeAddressLabel() + ")" : String("Offline");
+  String tiltSensor = imuAvailable ? String("Online") : String("Offline");
   String tiltOrientation = tiltOrientationName();
   String pitchInvert = onOffLabel(invertPitchAxis);
   String rollInvert = onOffLabel(invertRollAxis);
@@ -7,8 +8,21 @@ String htmlPage() {
   String tolerance = String(tiltBubbleToleranceDeg, 1) + " deg";
   String axisLabelButton = showTiltAxisLabels ? "Hide Axis Labels" : "Show Axis Labels";
   String temperatureValue = bmeAvailable ? String(environmentTempC, 1) + " C" : String("Unavailable");
-  String pitchValue = String(pitchDeg, 1) + " deg";
-  String rollValue = String(rollDeg, 1) + " deg";
+  String pitchValue = imuAvailable ? String(pitchDeg, 1) + " deg" : String("Unavailable");
+  String rollValue = imuAvailable ? String(rollDeg, 1) + " deg" : String("Unavailable");
+  String gpsLock = gpsLockLabel();
+  String gpsSatellitesValue = gpsDataSeen ? String(gpsSatellites) : String("0");
+  String gpsLatitudeValue = gpsLatitudeLabel();
+  String gpsLongitudeValue = gpsLongitudeLabel();
+  String gpsRawSpeedValue = gpsSpeedValid ? String(gpsRawMph, 1) + " mph" : String("Unavailable");
+  String fusedSpeedValue = String(dashboardMph, 1) + " mph";
+  String speedFusionModeValue = speedFusionLeadModeLabel();
+  String speedSourceValue = speedSourceLabel();
+  String gpsFixAgeValue = gpsFixAgeLabel();
+  String gpsLedButtonLabel = speedFusionLeadMode == SPEED_LEAD_GPS ? "GPS Led Active" : "Use GPS Led";
+  String accelLedButtonLabel = imuAvailable ?
+    (speedFusionLeadMode == SPEED_LEAD_ACCEL ? "Accel Led Active" : "Use Accel Led") :
+    String("Accel Unavailable");
 
   String html = R"HTML(
 <!DOCTYPE html>
@@ -121,7 +135,7 @@ String htmlPage() {
   <div class="card">
     <h1>CarDashboard</h1>
     <div class="lede">
-      The display now stays on a single combined dashboard panel. Tilt and temperature are live; the other indicators remain fixed demo values for layout work.
+      The display stays on a single combined dashboard panel. Tilt, temperature, GPS, and fused speed are live; the remaining indicators are still fixed demo values.
     </div>
 
     <div class="status-grid">
@@ -138,8 +152,48 @@ String htmlPage() {
         TEMPERATURE_VALUE
       </div>
       <div class="status">
+        <span class="label">GPS Lock</span>
+        GPS_LOCK
+      </div>
+      <div class="status">
+        <span class="label">Satellites</span>
+        GPS_SATELLITES
+      </div>
+      <div class="status">
+        <span class="label">Latitude</span>
+        GPS_LATITUDE
+      </div>
+      <div class="status">
+        <span class="label">Longitude</span>
+        GPS_LONGITUDE
+      </div>
+      <div class="status">
+        <span class="label">GPS Speed</span>
+        GPS_SPEED
+      </div>
+      <div class="status">
+        <span class="label">Fused Speed</span>
+        FUSED_SPEED
+      </div>
+      <div class="status">
+        <span class="label">Fusion Mode</span>
+        SPEED_FUSION_MODE
+      </div>
+      <div class="status">
+        <span class="label">Speed Source</span>
+        SPEED_SOURCE
+      </div>
+      <div class="status">
+        <span class="label">Fix Age</span>
+        GPS_FIX_AGE
+      </div>
+      <div class="status">
         <span class="label">Tilt Orientation</span>
         TILT_ORIENTATION
+      </div>
+      <div class="status">
+        <span class="label">Tilt Sensor</span>
+        TILT_SENSOR
       </div>
       <div class="status">
         <span class="label">Pitch / Roll</span>
@@ -154,10 +208,26 @@ String htmlPage() {
       </div>
     </div>
 
-    <div class="buttons">
+    <div class="button-row">
       <form action="/set" method="get">
         <input type="hidden" name="tilt_reset" value="1">
         <button class="warning" type="submit">Reset Tilt Zero</button>
+      </form>
+      <form action="/set" method="get">
+        <input type="hidden" name="speed_reset" value="1">
+        <button class="warning" type="submit">Reset Speed Fusion</button>
+      </form>
+    </div>
+
+    <div class="subhead">Speed Fusion Mode</div>
+    <div class="button-row">
+      <form action="/set" method="get">
+        <input type="hidden" name="speed_mode" value="gps">
+        <button class="secondary" type="submit">GPS_LED_BUTTON</button>
+      </form>
+      <form action="/set" method="get">
+        <input type="hidden" name="speed_mode" value="accel">
+        <button class="tertiary" type="submit">ACCEL_LED_BUTTON</button>
       </form>
     </div>
 
@@ -231,7 +301,19 @@ String htmlPage() {
 
   html.replace("ENVIRONMENT_SENSOR", environmentSensor);
   html.replace("TEMPERATURE_VALUE", temperatureValue);
+  html.replace("GPS_LOCK", gpsLock);
+  html.replace("GPS_SATELLITES", gpsSatellitesValue);
+  html.replace("GPS_LATITUDE", gpsLatitudeValue);
+  html.replace("GPS_LONGITUDE", gpsLongitudeValue);
+  html.replace("GPS_SPEED", gpsRawSpeedValue);
+  html.replace("FUSED_SPEED", fusedSpeedValue);
+  html.replace("SPEED_FUSION_MODE", speedFusionModeValue);
+  html.replace("SPEED_SOURCE", speedSourceValue);
+  html.replace("GPS_FIX_AGE", gpsFixAgeValue);
+  html.replace("GPS_LED_BUTTON", gpsLedButtonLabel);
+  html.replace("ACCEL_LED_BUTTON", accelLedButtonLabel);
   html.replace("TILT_ORIENTATION", tiltOrientation);
+  html.replace("TILT_SENSOR", tiltSensor);
   html.replace("PITCH_VALUE", pitchValue);
   html.replace("ROLL_VALUE", rollValue);
   html.replace("PITCH_INVERT", pitchInvert);
@@ -253,11 +335,25 @@ void handleSet() {
         requestedRotation == 180 || requestedRotation == 270) {
       tiltOrientationDeg = requestedRotation;
       applyTiltOrientation();
+      resetSpeedFusion();
     }
   }
 
   if (server.hasArg("tilt_reset")) {
     resetTiltReference();
+  }
+
+  if (server.hasArg("speed_reset")) {
+    resetSpeedFusion();
+  }
+
+  if (server.hasArg("speed_mode")) {
+    String requestedMode = server.arg("speed_mode");
+    if (requestedMode == "gps") {
+      setSpeedFusionLeadMode(SPEED_LEAD_GPS);
+    } else if (requestedMode == "accel") {
+      setSpeedFusionLeadMode(SPEED_LEAD_ACCEL);
+    }
   }
 
   if (server.hasArg("tilt_invert_pitch")) {
