@@ -7,11 +7,13 @@
 #include <Adafruit_BME280.h>
 #include <Adafruit_Sensor.h>
 #include <Arduino_LSM6DSOX.h>
+#include <Preferences.h>
 #include <math.h>
 
 TFT_eSPI tft = TFT_eSPI();
 TFT_eSprite spr = TFT_eSprite(&tft);
 WebServer server(80);
+Preferences steeringPreferences;
 
 // ----------------------
 // WiFi AP config
@@ -47,6 +49,41 @@ String dashboardOdometer = "000000";
 unsigned long lastBlinkToggle = 0;
 bool warningOn = true;
 const unsigned long BLINK_INTERVAL_MS = 500;
+
+// ----------------------
+// Steering / turn signal state
+// ----------------------
+static const int STEERING_MIN_DEG = -45;
+static const int STEERING_MAX_DEG = 45;
+static const int STEERING_INPUT_PIN = 32;
+static const int STEERING_DEFAULT_RIGHT_OFFSET_MV = 100;
+static const int STEERING_DEFAULT_LEFT_OFFSET_MV = 70;
+static const int STEERING_VALID_MIN_MV = 0;
+static const int STEERING_VALID_MAX_MV = 1000;
+static const int STEERING_SAMPLE_COUNT = 8;
+static const int STEERING_CALIBRATION_SAMPLE_COUNT = 40;
+static const int STEERING_CALIBRATION_SAMPLE_DELAY_MS = 3;
+static const float STEERING_SMOOTHING_ALPHA = 0.25f;
+static const int TURN_SIGNAL_RELEASE_MARGIN_DEG = 3;
+static const int TURN_THRESHOLD_MIN_DEG = 0;
+static const int TURN_THRESHOLD_MAX_DEG = 45;
+static const int LEFT_TURN_LED_PIN = 25;
+static const int RIGHT_TURN_LED_PIN = 26;
+static const bool TURN_LED_ACTIVE_LOW = true;
+
+int steeringWheelAngleDeg = 0;
+float smoothedSteeringAngleDeg = 0.0f;
+int steeringInputRaw = 0;
+int steeringInputMv = 0;
+int steeringInputMinMv = 9999;
+int steeringInputMaxMv = 0;
+bool steeringInputValid = false;
+bool leftTurnSignalActive = false;
+bool rightTurnSignalActive = false;
+int steeringCenterMv = 0;
+int steeringLeftMv = 0;
+int steeringRightMv = 0;
+int turnSignalThresholdDeg = 15;
 
 // ----------------------
 // Environment sensor data
@@ -96,6 +133,7 @@ const unsigned long TILT_RENDER_INTERVAL_MS = 50;
 // ----------------------
 String htmlPage();
 void handleRoot();
+void handleState();
 void handleSet();
 
 void renderGaugeScreen(TFT_eSprite &s);
@@ -111,6 +149,21 @@ void updateIMU();
 void renderCurrentScreen();
 void applyTiltOrientation();
 void resetTiltReference();
+int readSteeringAverageMv(int sampleCount, int sampleDelayMs);
+void loadSteeringCalibration();
+void saveSteeringCalibration();
+bool steeringCalibrationValid();
+void updateSteeringInput();
+void updateTurnSignalIntent();
+void updateTurnSignalOutputs();
+bool leftTurnSignalRequested();
+bool rightTurnSignalRequested();
+bool leftTurnSignalFlashing();
+bool rightTurnSignalFlashing();
+String turnSignalLabel();
+String turnSignalOutputLabel();
+String steeringInputStatusLabel();
+String steeringCalibrationStatusLabel();
 String bmeAddressLabel();
 String tiltOrientationName();
 String onOffLabel(bool enabled);
@@ -137,6 +190,16 @@ float clamp01(float value) {
   }
   if (value > 1.0f) {
     return 1.0f;
+  }
+  return value;
+}
+
+int clampInt(int value, int minValue, int maxValue) {
+  if (value < minValue) {
+    return minValue;
+  }
+  if (value > maxValue) {
+    return maxValue;
   }
   return value;
 }
@@ -278,6 +341,245 @@ String onOffLabel(bool enabled) {
   return "Off";
 }
 
+int readSteeringAverageMv(int sampleCount, int sampleDelayMs) {
+  if (sampleCount <= 0) {
+    sampleCount = 1;
+  }
+
+  long mvTotal = 0;
+  for (int i = 0; i < sampleCount; i++) {
+    mvTotal += analogReadMilliVolts(STEERING_INPUT_PIN);
+    if (sampleDelayMs > 0) {
+      delay(sampleDelayMs);
+    }
+  }
+
+  return mvTotal / sampleCount;
+}
+
+void saveSteeringCalibration() {
+  steeringPreferences.putInt("center_mv", steeringCenterMv);
+  steeringPreferences.putInt("left_mv", steeringLeftMv);
+  steeringPreferences.putInt("right_mv", steeringRightMv);
+  steeringPreferences.putInt("threshold_deg", turnSignalThresholdDeg);
+}
+
+void loadSteeringCalibration() {
+  steeringPreferences.begin("steering", false);
+
+  steeringCenterMv = readSteeringAverageMv(
+    STEERING_CALIBRATION_SAMPLE_COUNT,
+    STEERING_CALIBRATION_SAMPLE_DELAY_MS
+  );
+  steeringInputMv = steeringCenterMv;
+  steeringInputMinMv = steeringCenterMv;
+  steeringInputMaxMv = steeringCenterMv;
+
+  steeringLeftMv = steeringPreferences.getInt(
+    "left_mv",
+    steeringCenterMv + STEERING_DEFAULT_LEFT_OFFSET_MV
+  );
+  steeringRightMv = steeringPreferences.getInt(
+    "right_mv",
+    clampInt(steeringCenterMv - STEERING_DEFAULT_RIGHT_OFFSET_MV, 0, 3300)
+  );
+  turnSignalThresholdDeg = clampInt(
+    steeringPreferences.getInt("threshold_deg", turnSignalThresholdDeg),
+    TURN_THRESHOLD_MIN_DEG,
+    TURN_THRESHOLD_MAX_DEG
+  );
+
+  saveSteeringCalibration();
+}
+
+bool steeringCalibrationValid() {
+  return steeringRightMv < steeringCenterMv && steeringCenterMv < steeringLeftMv;
+}
+
+float mapSteeringVoltageToAngle(int millivolts) {
+  if (!steeringCalibrationValid()) {
+    return 0.0f;
+  }
+
+  if (millivolts <= steeringRightMv) {
+    return STEERING_MAX_DEG;
+  }
+  if (millivolts >= steeringLeftMv) {
+    return STEERING_MIN_DEG;
+  }
+  if (millivolts < steeringCenterMv) {
+    float progress = (float)(steeringCenterMv - millivolts) /
+      (float)(steeringCenterMv - steeringRightMv);
+    return progress * STEERING_MAX_DEG;
+  }
+
+  float progress = (float)(millivolts - steeringCenterMv) /
+    (float)(steeringLeftMv - steeringCenterMv);
+  return progress * STEERING_MIN_DEG;
+}
+
+void updateSteeringInput() {
+  long rawTotal = 0;
+  long mvTotal = 0;
+  for (int i = 0; i < STEERING_SAMPLE_COUNT; i++) {
+    rawTotal += analogRead(STEERING_INPUT_PIN);
+    mvTotal += analogReadMilliVolts(STEERING_INPUT_PIN);
+  }
+  steeringInputRaw = rawTotal / STEERING_SAMPLE_COUNT;
+  steeringInputMv = mvTotal / STEERING_SAMPLE_COUNT;
+  if (steeringInputMv < steeringInputMinMv) {
+    steeringInputMinMv = steeringInputMv;
+  }
+  if (steeringInputMv > steeringInputMaxMv) {
+    steeringInputMaxMv = steeringInputMv;
+  }
+
+  if (!steeringCalibrationValid()) {
+    steeringInputValid = false;
+    steeringWheelAngleDeg = 0;
+    smoothedSteeringAngleDeg = 0.0f;
+    leftTurnSignalActive = false;
+    rightTurnSignalActive = false;
+    return;
+  }
+
+  if (steeringInputMv < STEERING_VALID_MIN_MV ||
+      steeringInputMv > STEERING_VALID_MAX_MV) {
+    steeringInputValid = false;
+    steeringWheelAngleDeg = 0;
+    smoothedSteeringAngleDeg = 0.0f;
+    leftTurnSignalActive = false;
+    rightTurnSignalActive = false;
+    return;
+  }
+
+  steeringInputValid = true;
+  float targetAngle = mapSteeringVoltageToAngle(steeringInputMv);
+  smoothedSteeringAngleDeg +=
+    (targetAngle - smoothedSteeringAngleDeg) * STEERING_SMOOTHING_ALPHA;
+  steeringWheelAngleDeg = clampInt(
+    (int)round(smoothedSteeringAngleDeg),
+    STEERING_MIN_DEG,
+    STEERING_MAX_DEG
+  );
+  updateTurnSignalIntent();
+}
+
+void updateTurnSignalIntent() {
+  if (!steeringInputValid) {
+    leftTurnSignalActive = false;
+    rightTurnSignalActive = false;
+    return;
+  }
+
+  int activateThreshold = turnSignalThresholdDeg;
+  if (activateThreshold <= 0 && steeringWheelAngleDeg == 0) {
+    leftTurnSignalActive = false;
+    rightTurnSignalActive = false;
+    return;
+  }
+
+  int releaseThreshold = turnSignalThresholdDeg - TURN_SIGNAL_RELEASE_MARGIN_DEG;
+  if (releaseThreshold < 0) {
+    releaseThreshold = 0;
+  }
+
+  if (steeringWheelAngleDeg <= -activateThreshold) {
+    leftTurnSignalActive = true;
+    rightTurnSignalActive = false;
+    return;
+  }
+
+  if (steeringWheelAngleDeg >= activateThreshold) {
+    rightTurnSignalActive = true;
+    leftTurnSignalActive = false;
+    return;
+  }
+
+  if (leftTurnSignalActive && steeringWheelAngleDeg <= -releaseThreshold) {
+    return;
+  }
+
+  if (rightTurnSignalActive && steeringWheelAngleDeg >= releaseThreshold) {
+    return;
+  }
+
+  leftTurnSignalActive = false;
+  rightTurnSignalActive = false;
+}
+
+bool leftTurnSignalRequested() {
+  return leftTurnSignalActive;
+}
+
+bool rightTurnSignalRequested() {
+  return rightTurnSignalActive;
+}
+
+bool leftTurnSignalFlashing() {
+  return leftTurnSignalRequested() && warningOn;
+}
+
+bool rightTurnSignalFlashing() {
+  return rightTurnSignalRequested() && warningOn;
+}
+
+void writeTurnSignalLed(int pin, bool active) {
+  if (TURN_LED_ACTIVE_LOW) {
+    digitalWrite(pin, active ? LOW : HIGH);
+  } else {
+    digitalWrite(pin, active ? HIGH : LOW);
+  }
+}
+
+void updateTurnSignalOutputs() {
+  writeTurnSignalLed(LEFT_TURN_LED_PIN, leftTurnSignalFlashing());
+  writeTurnSignalLed(RIGHT_TURN_LED_PIN, rightTurnSignalFlashing());
+}
+
+String turnSignalLabel() {
+  if (leftTurnSignalRequested()) {
+    return "Left";
+  }
+  if (rightTurnSignalRequested()) {
+    return "Right";
+  }
+  return "Off";
+}
+
+String turnSignalOutputLabel() {
+  if (leftTurnSignalFlashing()) {
+    return "Left on";
+  }
+  if (rightTurnSignalFlashing()) {
+    return "Right on";
+  }
+  return "Off";
+}
+
+String steeringInputStatusLabel() {
+  if (!steeringCalibrationValid()) {
+    return "Calibration invalid";
+  }
+  if (steeringInputValid) {
+    return "Online";
+  }
+  if (steeringInputMv < STEERING_VALID_MIN_MV) {
+    return "Low / disconnected";
+  }
+  if (steeringInputMv > STEERING_VALID_MAX_MV) {
+    return "High / over range";
+  }
+  return "Invalid";
+}
+
+String steeringCalibrationStatusLabel() {
+  if (steeringCalibrationValid()) {
+    return "Valid";
+  }
+  return "Invalid: right must be below center and left above center";
+}
+
 // ----------------------
 // Rendering
 // ----------------------
@@ -292,6 +594,16 @@ void renderCurrentScreen() {
 void setup() {
   pinMode(4, OUTPUT);
   digitalWrite(4, HIGH);
+  pinMode(STEERING_INPUT_PIN, INPUT);
+  analogReadResolution(12);
+  analogSetPinAttenuation(STEERING_INPUT_PIN, ADC_0db);
+  loadSteeringCalibration();
+  pinMode(LEFT_TURN_LED_PIN, OUTPUT);
+  pinMode(RIGHT_TURN_LED_PIN, OUTPUT);
+  writeTurnSignalLed(LEFT_TURN_LED_PIN, false);
+  writeTurnSignalLed(RIGHT_TURN_LED_PIN, false);
+  updateSteeringInput();
+  updateTurnSignalOutputs();
 
   Serial.begin(115200);
 
@@ -332,6 +644,7 @@ void setup() {
   initGps();
 
   server.on("/", handleRoot);
+  server.on("/state", handleState);
   server.on("/set", handleSet);
   server.begin();
 
@@ -339,6 +652,8 @@ void setup() {
 }
 
 void loop() {
+  updateSteeringInput();
+  updateTurnSignalOutputs();
   server.handleClient();
   updateGps();
   updateIMU();
@@ -354,6 +669,7 @@ void loop() {
   if (now - lastBlinkToggle >= BLINK_INTERVAL_MS) {
     lastBlinkToggle = now;
     warningOn = !warningOn;
+    updateTurnSignalOutputs();
   }
 
   if (now - lastTiltRender >= TILT_RENDER_INTERVAL_MS) {

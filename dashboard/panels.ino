@@ -332,8 +332,8 @@ void renderGaugeScreen(TFT_eSprite &s) {
   drawFuelGauge(s, 20, 40, 17, dashboardFuelLevel);
   drawHeadlightIndicator(s, 37, 7, dashboardHeadlightsOn);
 
-  drawTurnSignal(s, 92, 47, true, warningOn);
-  drawTurnSignal(s, 126, 47, false, warningOn);
+  drawTurnSignal(s, 92, 47, true, leftTurnSignalFlashing());
+  drawTurnSignal(s, 126, 47, false, rightTurnSignalFlashing());
   drawGearColumn(s, 118, 74, dashboardGearIndex);
 
   drawTiltWidget(s, 145, 4, 24, false, pitchDeg);
