@@ -14,6 +14,7 @@ TFT_eSPI tft = TFT_eSPI();
 TFT_eSprite spr = TFT_eSprite(&tft);
 WebServer server(80);
 Preferences steeringPreferences;
+Preferences dashboardPreferences;
 
 // ----------------------
 // WiFi AP config
@@ -26,6 +27,12 @@ const char *AP_PASSWORD = "carradio123";
 // ----------------------
 static const int SCREEN_W = 240;
 static const int SCREEN_H = 135;
+static const int SCREEN_BACKLIGHT_PIN = 4;
+static const int SCREEN_BRIGHTNESS_MIN_PERCENT = 5;
+static const int SCREEN_BRIGHTNESS_MAX_PERCENT = 100;
+static const int SCREEN_BRIGHTNESS_DEFAULT_PERCENT = 5;
+
+int screenBrightnessPercent = SCREEN_BRIGHTNESS_DEFAULT_PERCENT;
 
 // ----------------------
 // IMU / I2C config
@@ -147,6 +154,10 @@ bool initBME280();
 void updateEnvironment();
 void updateIMU();
 void renderCurrentScreen();
+void loadScreenBrightness();
+void saveScreenBrightness();
+void applyScreenBrightness();
+void setScreenBrightnessPercent(int brightnessPercent);
 void applyTiltOrientation();
 void resetTiltReference();
 int readSteeringAverageMv(int sampleCount, int sampleDelayMs);
@@ -339,6 +350,40 @@ String onOffLabel(bool enabled) {
     return "On";
   }
   return "Off";
+}
+
+void loadScreenBrightness() {
+  dashboardPreferences.begin("dashboard", false);
+  screenBrightnessPercent = clampInt(
+    dashboardPreferences.getInt("brightness", SCREEN_BRIGHTNESS_DEFAULT_PERCENT),
+    SCREEN_BRIGHTNESS_MIN_PERCENT,
+    SCREEN_BRIGHTNESS_MAX_PERCENT
+  );
+}
+
+void saveScreenBrightness() {
+  dashboardPreferences.putInt("brightness", screenBrightnessPercent);
+}
+
+void applyScreenBrightness() {
+  int duty = map(
+    screenBrightnessPercent,
+    0,
+    100,
+    0,
+    255
+  );
+  analogWrite(SCREEN_BACKLIGHT_PIN, duty);
+}
+
+void setScreenBrightnessPercent(int brightnessPercent) {
+  screenBrightnessPercent = clampInt(
+    brightnessPercent,
+    SCREEN_BRIGHTNESS_MIN_PERCENT,
+    SCREEN_BRIGHTNESS_MAX_PERCENT
+  );
+  applyScreenBrightness();
+  saveScreenBrightness();
 }
 
 int readSteeringAverageMv(int sampleCount, int sampleDelayMs) {
@@ -592,8 +637,9 @@ void renderCurrentScreen() {
 // Setup / loop
 // ----------------------
 void setup() {
-  pinMode(4, OUTPUT);
-  digitalWrite(4, HIGH);
+  pinMode(SCREEN_BACKLIGHT_PIN, OUTPUT);
+  loadScreenBrightness();
+  applyScreenBrightness();
   pinMode(STEERING_INPUT_PIN, INPUT);
   analogReadResolution(12);
   analogSetPinAttenuation(STEERING_INPUT_PIN, ADC_0db);

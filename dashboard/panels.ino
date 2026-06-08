@@ -88,18 +88,19 @@ void drawTallCircularGauge(
   s.setTextDatum(TL_DATUM);
 }
 
-void drawFuelGauge(
+void drawDownwardArcGauge(
   TFT_eSprite &s,
   int pivotX,
   int pivotY,
   int radius,
-  float fuelLevel
+  float progress,
+  const char *startLabel,
+  const char *endLabel
 ) {
   uint16_t detail = rgb565(64, 64, 64);
-  float startDeg = -60.0f;
-  float endDeg = 60.0f;
-  float progressDown = 1.0f - clamp01(fuelLevel);
-  float needleDeg = startDeg + ((endDeg - startDeg) * progressDown);
+  float startDeg = 30.0f;
+  float endDeg = 150.0f;
+  float needleDeg = startDeg + ((endDeg - startDeg) * clamp01(progress));
 
   drawArcLine(s, pivotX, pivotY, radius, startDeg, endDeg, TFT_WHITE);
   drawArcLine(s, pivotX, pivotY, radius - 1, startDeg, endDeg, TFT_WHITE);
@@ -135,11 +136,41 @@ void drawFuelGauge(
   s.fillCircle(pivotX, pivotY, 4, TFT_WHITE);
   s.fillCircle(pivotX, pivotY, 2, TFT_RED);
 
-  s.setTextColor(TFT_WHITE, TFT_BLACK);
-  s.setTextDatum(MC_DATUM);
-  s.drawString("F", pivotX + radius - 9, pivotY - radius - 5, 1);
-  s.drawString("E", pivotX + radius - 9, pivotY + radius + 8, 1);
-  s.setTextDatum(TL_DATUM);
+  if (startLabel != nullptr || endLabel != nullptr) {
+    s.setTextColor(TFT_WHITE, TFT_BLACK);
+    s.setTextDatum(MC_DATUM);
+
+    if (startLabel != nullptr) {
+      s.drawString(
+        startLabel,
+        polarX(pivotX, radius + 13, startDeg) - 5,
+        polarY(pivotY, radius + 8, startDeg),
+        1
+      );
+    }
+
+    if (endLabel != nullptr) {
+      s.drawString(
+        endLabel,
+        polarX(pivotX, radius + 8, endDeg) + 5,
+        polarY(pivotY, radius + 8, endDeg),
+        1
+      );
+    }
+
+    s.setTextDatum(TL_DATUM);
+  }
+}
+
+void drawFuelGauge(
+  TFT_eSprite &s,
+  int pivotX,
+  int pivotY,
+  int radius,
+  float fuelLevel
+) {
+  float progressDown = 1.0f - clamp01(fuelLevel);
+  drawDownwardArcGauge(s, pivotX, pivotY, radius, progressDown, "F", "E");
 }
 
 void drawTemperatureGauge(
@@ -150,45 +181,8 @@ void drawTemperatureGauge(
   float temperatureC,
   bool sensorAvailable
 ) {
-  uint16_t detail = rgb565(64, 64, 64);
-  float startDeg = 120.0f;
-  float endDeg = 240.0f;
   float progressDown = sensorAvailable ? (1.0f - normalizeGaugeValue(temperatureC, 0.0f, 50.0f)) : 0.5f;
-  float needleDeg = startDeg + ((endDeg - startDeg) * progressDown);
-
-  drawArcLine(s, pivotX, pivotY, radius, startDeg, endDeg, TFT_WHITE);
-  drawArcLine(s, pivotX, pivotY, radius - 1, startDeg, endDeg, TFT_WHITE);
-  drawArcLine(s, pivotX, pivotY, radius - 4, startDeg, endDeg, detail);
-
-  for (int i = 0; i <= 4; i++) {
-    float p = (float)i / 4.0f;
-    float deg = startDeg + ((endDeg - startDeg) * p);
-    int tickInner = (i == 0 || i == 4) ? radius - 8 : radius - 4;
-    s.drawLine(
-      polarX(pivotX, tickInner, deg),
-      polarY(pivotY, tickInner, deg),
-      polarX(pivotX, radius, deg),
-      polarY(pivotY, radius, deg),
-      TFT_WHITE
-    );
-  }
-
-  s.drawLine(
-    pivotX,
-    pivotY,
-    polarX(pivotX, radius - 8, needleDeg),
-    polarY(pivotY, radius - 8, needleDeg),
-    TFT_RED
-  );
-  s.drawLine(
-    pivotX,
-    pivotY + 1,
-    polarX(pivotX, radius - 8, needleDeg),
-    polarY(pivotY, radius - 8, needleDeg),
-    TFT_RED
-  );
-  s.fillCircle(pivotX, pivotY, 4, TFT_WHITE);
-  s.fillCircle(pivotX, pivotY, 2, TFT_RED);
+  drawDownwardArcGauge(s, pivotX, pivotY, radius, progressDown, nullptr, nullptr);
 }
 
 void drawTurnSignal(TFT_eSprite &s, int x, int y, bool left, bool active) {
@@ -323,7 +317,7 @@ void renderGaugeScreen(TFT_eSprite &s) {
 
   bool lowFuelActive = dashboardFuelLevel <= 0.2f;
   drawFuelGauge(s, 20 + offsetX, 40 + offsetY, 17, dashboardFuelLevel);
-  drawHeadlightIndicator(s, 37 + offsetX, 7 + offsetY, dashboardHeadlightsOn);
+  drawHeadlightIndicator(s, 0 + offsetX, 62 + offsetY, dashboardHeadlightsOn);
 
   drawTurnSignal(s, 85 + offsetX, 62 + offsetY, true, leftTurnSignalFlashing());
   drawTurnSignal(s, 132 + offsetX, 62 + offsetY, false, rightTurnSignalFlashing());

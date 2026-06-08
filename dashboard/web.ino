@@ -38,6 +38,7 @@ String htmlPage() {
   String steeringRightValue = String(steeringRightMv);
   String calibrationStatusValue = steeringCalibrationStatusLabel();
   String calibrationValidValue = steeringCalibrationValid() ? String("Yes") : String("No");
+  String brightnessValue = String(screenBrightnessPercent);
 
   String html = R"HTML(
 <!DOCTYPE html>
@@ -259,7 +260,8 @@ String htmlPage() {
     <div class="status-grid">
       <div class="status">
         <span class="label">Display</span>
-        Unified Dashboard
+        Unified Dashboard<br>
+        Brightness: <span id="brightnessStatusValue">BRIGHTNESS_VALUE</span>%
       </div>
       <div class="status">
         <span class="label">Environment Sensor</span>
@@ -323,6 +325,24 @@ String htmlPage() {
         Roll invert: ROLL_INVERT<br>
         Axis labels: AXIS_LABELS<br>
         Bubble tolerance: TILT_TOLERANCE
+      </div>
+    </div>
+
+    <div class="subhead">Screen Brightness</div>
+    <div class="control-panel">
+      <div class="slider-row">
+        <div class="value-row">
+          <span>Backlight</span>
+          <span><span id="brightnessValue">BRIGHTNESS_VALUE</span>%</span>
+        </div>
+        <input
+          id="brightnessSlider"
+          type="range"
+          min="5"
+          max="100"
+          step="1"
+          value="BRIGHTNESS_VALUE"
+        >
       </div>
     </div>
 
@@ -519,9 +539,12 @@ String htmlPage() {
   <script>
     const steeringSlider = document.getElementById('steeringSlider');
     const thresholdSlider = document.getElementById('thresholdSlider');
+    const brightnessSlider = document.getElementById('brightnessSlider');
     const steeringWheel = document.getElementById('steeringWheel');
     const steeringValue = document.getElementById('steeringValue');
     const thresholdValue = document.getElementById('thresholdValue');
+    const brightnessValue = document.getElementById('brightnessValue');
+    const brightnessStatusValue = document.getElementById('brightnessStatusValue');
     const steeringVoltageValue = document.getElementById('steeringVoltageValue');
     const steeringRawValue = document.getElementById('steeringRawValue');
     const steeringStatusValue = document.getElementById('steeringStatusValue');
@@ -554,6 +577,17 @@ String htmlPage() {
     function sendThresholdChange() {
       const params = new URLSearchParams();
       params.set('turn_threshold', thresholdSlider.value);
+      sendSetUpdate(params);
+    }
+
+    function updateBrightnessPreview() {
+      brightnessValue.textContent = brightnessSlider.value;
+      brightnessStatusValue.textContent = brightnessSlider.value;
+    }
+
+    function sendBrightnessChange() {
+      const params = new URLSearchParams();
+      params.set('brightness', brightnessSlider.value);
       sendSetUpdate(params);
     }
 
@@ -591,6 +625,9 @@ String htmlPage() {
       turnSignalValue.textContent = state.turn_signal;
       turnSignalOutputValue.textContent = state.turn_signal_output;
       calibrationStatusValue.textContent = state.calibration_status;
+      brightnessSlider.value = state.brightness;
+      brightnessValue.textContent = state.brightness;
+      brightnessStatusValue.textContent = state.brightness;
       centerMvValue.textContent = state.center_mv;
       leftRightMvValue.textContent = state.left_mv + ' / ' + state.right_mv;
       thresholdSlider.value = state.turn_threshold;
@@ -610,6 +647,8 @@ String htmlPage() {
 
     thresholdSlider.addEventListener('input', updateThresholdPreview);
     thresholdSlider.addEventListener('change', sendThresholdChange);
+    brightnessSlider.addEventListener('input', updateBrightnessPreview);
+    brightnessSlider.addEventListener('change', sendBrightnessChange);
     centerMvInput.addEventListener('change', sendManualCalibrationUpdate);
     leftMvInput.addEventListener('change', sendManualCalibrationUpdate);
     rightMvInput.addEventListener('change', sendManualCalibrationUpdate);
@@ -658,6 +697,7 @@ String htmlPage() {
   html.replace("RIGHT_MV", steeringRightValue);
   html.replace("CALIBRATION_STATUS", calibrationStatusValue);
   html.replace("CALIBRATION_VALID", calibrationValidValue);
+  html.replace("BRIGHTNESS_VALUE", brightnessValue);
   html.replace("TURN_THRESHOLD", turnThresholdValue);
   html.replace("TURN_SIGNAL_VALUE", turnSignalValue);
   html.replace("TURN_SIGNAL_OUTPUT", turnSignalOutputValue);
@@ -716,6 +756,8 @@ String stateJson() {
   json += ",\"turn_signal_output\":\"";
   json += turnSignalOutputLabel();
   json += "\"";
+  json += ",\"brightness\":";
+  json += String(screenBrightnessPercent);
   json += "}";
   return json;
 }
@@ -730,7 +772,8 @@ void handleSet() {
     server.hasArg("center_mv") ||
     server.hasArg("left_mv") ||
     server.hasArg("right_mv") ||
-    server.hasArg("calibrate")
+    server.hasArg("calibrate") ||
+    server.hasArg("brightness")
   ) &&
     !server.hasArg("tilt_rotation") &&
     !server.hasArg("tilt_reset") &&
@@ -788,6 +831,10 @@ void handleSet() {
       tiltBubbleToleranceDeg = requestedTolerance;
       applyTiltOrientation();
     }
+  }
+
+  if (server.hasArg("brightness")) {
+    setScreenBrightnessPercent(server.arg("brightness").toInt());
   }
 
   bool steeringSettingsChanged = false;
