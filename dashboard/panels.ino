@@ -32,15 +32,6 @@ void drawArcLine(
   }
 }
 
-void drawDashboardShell(TFT_eSprite &s) {
-  uint16_t detail = rgb565(64, 64, 64);
-
-  s.drawLine(1, 1, 239, 1, TFT_WHITE);
-  s.drawLine(1, 1, 20, 134, TFT_WHITE);
-  s.drawLine(239, 1, 212, 134, TFT_WHITE);
-  s.drawLine(20, 134, 212, 134, TFT_WHITE);
-}
-
 void drawTallCircularGauge(
   TFT_eSprite &s,
   int cx,
@@ -326,23 +317,25 @@ void drawTiltWidget(
 
 void renderGaugeScreen(TFT_eSprite &s) {
   s.fillSprite(TFT_BLACK);
-  drawDashboardShell(s);
+
+  int offsetX = 0;
+  int offsetY = 10;
 
   bool lowFuelActive = dashboardFuelLevel <= 0.2f;
-  drawFuelGauge(s, 20, 40, 17, dashboardFuelLevel);
-  drawHeadlightIndicator(s, 37, 7, dashboardHeadlightsOn);
+  drawFuelGauge(s, 20 + offsetX, 40 + offsetY, 17, dashboardFuelLevel);
+  drawHeadlightIndicator(s, 37 + offsetX, 7 + offsetY, dashboardHeadlightsOn);
 
-  drawTurnSignal(s, 92, 47, true, leftTurnSignalFlashing());
-  drawTurnSignal(s, 126, 47, false, rightTurnSignalFlashing());
-  drawGearColumn(s, 118, 74, dashboardGearIndex);
+  drawTurnSignal(s, 85 + offsetX, 62 + offsetY, true, leftTurnSignalFlashing());
+  drawTurnSignal(s, 132 + offsetX, 62 + offsetY, false, rightTurnSignalFlashing());
+  drawGearColumn(s, 118 + offsetX, 74 + offsetY, dashboardGearIndex);
 
-  drawTiltWidget(s, 145, 4, 24, false, pitchDeg);
-  drawTiltWidget(s, 177, 4, 24, true, rollDeg);
+  drawTiltWidget(s, 145 + offsetX, 4 + offsetY, 24, false, pitchDeg);
+  drawTiltWidget(s, 177 + offsetX, 4 + offsetY, 24, true, rollDeg);
 
   drawTallCircularGauge(
     s,
-    66,
-    100,
+    50 + offsetX,
+    110 + offsetY,
     45,
     0.0f,
     8.0f,
@@ -351,8 +344,8 @@ void renderGaugeScreen(TFT_eSprite &s) {
   );
   drawTallCircularGauge(
     s,
-    167,
-    100,
+    185 + offsetX,
+    110 + offsetY,
     45,
     0.0f,
     80.0f,
@@ -360,7 +353,7 @@ void renderGaugeScreen(TFT_eSprite &s) {
     "MPH"
   );
 
-  drawTemperatureGauge(s, 220, 40, 17, environmentTempC, bmeAvailable);
-  drawOdometer(s, 25, 118, dashboardOdometer);
-  drawLowFuelIndicator(s, 192, 118, lowFuelActive);
+  drawTemperatureGauge(s, 220 + offsetX, 40 + offsetY, 17, environmentTempC, bmeAvailable);
+  // drawOdometer(s, 25 + offsetX, 118 + offsetY, dashboardOdometer);
+  drawLowFuelIndicator(s, 195 + offsetX, 115 + offsetY, lowFuelActive);
 }
