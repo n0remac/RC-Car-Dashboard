@@ -15,12 +15,18 @@ TFT_eSprite spr = TFT_eSprite(&tft);
 WebServer server(80);
 Preferences steeringPreferences;
 Preferences dashboardPreferences;
+Preferences wifiPreferences;
 
 // ----------------------
 // WiFi AP config
 // ----------------------
 const char *AP_SSID = "CarRadio";
 const char *AP_PASSWORD = "carradio123";
+const char *WIFI_PREF_NAMESPACE = "wifi_sta";
+
+String wifiStaSsid = "";
+String wifiStaPassword = "";
+bool wifiStaCredentialsSaved = false;
 
 // ----------------------
 // Screen config
@@ -142,6 +148,9 @@ String htmlPage();
 void handleRoot();
 void handleState();
 void handleSet();
+void handleWifiScan();
+void handleWifiConnect();
+void handleWifiDisconnect();
 
 void renderGaugeScreen(TFT_eSprite &s);
 
@@ -158,6 +167,13 @@ void loadScreenBrightness();
 void saveScreenBrightness();
 void applyScreenBrightness();
 void setScreenBrightnessPercent(int brightnessPercent);
+void initWifi();
+void loadWifiStationCredentials();
+void saveWifiStationCredentials(const String &ssid, const String &password);
+void clearWifiStationCredentials();
+void beginWifiStation();
+String wifiStationStatusLabel();
+String wifiStationIpLabel();
 void applyTiltOrientation();
 void resetTiltReference();
 int readSteeringAverageMv(int sampleCount, int sampleDelayMs);
@@ -384,6 +400,82 @@ void setScreenBrightnessPercent(int brightnessPercent) {
   );
   applyScreenBrightness();
   saveScreenBrightness();
+}
+
+void loadWifiStationCredentials() {
+  wifiPreferences.begin(WIFI_PREF_NAMESPACE, false);
+  wifiStaSsid = wifiPreferences.getString("ssid", "");
+  wifiStaPassword = wifiPreferences.getString("password", "");
+  wifiStaCredentialsSaved = wifiStaSsid.length() > 0;
+}
+
+void saveWifiStationCredentials(const String &ssid, const String &password) {
+  wifiStaSsid = ssid;
+  wifiStaPassword = password;
+  wifiStaCredentialsSaved = wifiStaSsid.length() > 0;
+  wifiPreferences.putString("ssid", wifiStaSsid);
+  wifiPreferences.putString("password", wifiStaPassword);
+}
+
+void clearWifiStationCredentials() {
+  wifiStaSsid = "";
+  wifiStaPassword = "";
+  wifiStaCredentialsSaved = false;
+  wifiPreferences.remove("ssid");
+  wifiPreferences.remove("password");
+}
+
+void beginWifiStation() {
+  if (wifiStaSsid.length() == 0) {
+    return;
+  }
+
+  WiFi.begin(wifiStaSsid.c_str(), wifiStaPassword.c_str());
+  Serial.print("Connecting station WiFi to ");
+  Serial.println(wifiStaSsid);
+}
+
+void initWifi() {
+  WiFi.mode(WIFI_AP_STA);
+  WiFi.softAP(AP_SSID, AP_PASSWORD);
+
+  IPAddress apIp = WiFi.softAPIP();
+  Serial.print("AP IP address: ");
+  Serial.println(apIp);
+
+  loadWifiStationCredentials();
+  beginWifiStation();
+}
+
+String wifiStationStatusLabel() {
+  wl_status_t status = WiFi.status();
+  if (status == WL_CONNECTED) {
+    return "Connected";
+  }
+  if (status == WL_CONNECT_FAILED) {
+    return "Connect failed";
+  }
+  if (status == WL_CONNECTION_LOST) {
+    return "Connection lost";
+  }
+  if (status == WL_DISCONNECTED) {
+    return wifiStaCredentialsSaved ? String("Disconnected") : String("Not configured");
+  }
+  if (status == WL_IDLE_STATUS) {
+    return "Connecting";
+  }
+  if (status == WL_NO_SSID_AVAIL) {
+    return "Network unavailable";
+  }
+
+  return "Unknown";
+}
+
+String wifiStationIpLabel() {
+  if (WiFi.status() == WL_CONNECTED) {
+    return WiFi.localIP().toString();
+  }
+  return "Unavailable";
 }
 
 int readSteeringAverageMv(int sampleCount, int sampleDelayMs) {
@@ -660,12 +752,7 @@ void setup() {
   spr.createSprite(SCREEN_W, SCREEN_H);
   spr.fillSprite(TFT_BLACK);
 
-  WiFi.mode(WIFI_AP);
-  WiFi.softAP(AP_SSID, AP_PASSWORD);
-
-  IPAddress ip = WiFi.softAPIP();
-  Serial.print("AP IP address: ");
-  Serial.println(ip);
+  initWifi();
 
   Wire.begin(SDA_PIN, SCL_PIN);
 
@@ -692,6 +779,9 @@ void setup() {
   server.on("/", handleRoot);
   server.on("/state", handleState);
   server.on("/set", handleSet);
+  server.on("/wifi/scan", HTTP_GET, handleWifiScan);
+  server.on("/wifi/connect", HTTP_POST, handleWifiConnect);
+  server.on("/wifi/disconnect", HTTP_POST, handleWifiDisconnect);
   server.begin();
 
   renderCurrentScreen();

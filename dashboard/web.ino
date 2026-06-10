@@ -1,3 +1,35 @@
+String htmlEscape(const String &value) {
+  String escaped = value;
+  escaped.replace("&", "&amp;");
+  escaped.replace("<", "&lt;");
+  escaped.replace(">", "&gt;");
+  escaped.replace("\"", "&quot;");
+  escaped.replace("'", "&#39;");
+  return escaped;
+}
+
+String jsonEscape(const String &value) {
+  String escaped = "";
+  for (int i = 0; i < value.length(); i++) {
+    char c = value.charAt(i);
+    if (c == '"' || c == '\\') {
+      escaped += '\\';
+      escaped += c;
+    } else if (c == '\n') {
+      escaped += "\\n";
+    } else if (c == '\r') {
+      escaped += "\\r";
+    } else if (c == '\t') {
+      escaped += "\\t";
+    } else if ((uint8_t)c < 0x20) {
+      escaped += ' ';
+    } else {
+      escaped += c;
+    }
+  }
+  return escaped;
+}
+
 String htmlPage() {
   String environmentSensor = bmeAvailable ? String("Online (") + bmeAddressLabel() + ")" : String("Offline");
   String tiltSensor = imuAvailable ? String("Online") : String("Offline");
@@ -39,6 +71,10 @@ String htmlPage() {
   String calibrationStatusValue = steeringCalibrationStatusLabel();
   String calibrationValidValue = steeringCalibrationValid() ? String("Yes") : String("No");
   String brightnessValue = String(screenBrightnessPercent);
+  String wifiStaSsidValue = wifiStaSsid.length() > 0 ? htmlEscape(wifiStaSsid) : String("None");
+  String wifiStaStatusValue = wifiStationStatusLabel();
+  String wifiStaIpValue = wifiStationIpLabel();
+  String wifiStaSavedValue = wifiStaCredentialsSaved ? String("Yes") : String("No");
 
   String html = R"HTML(
 <!DOCTYPE html>
@@ -214,6 +250,45 @@ String htmlPage() {
       background: #101010;
       font-size: 15px;
     }
+    .network-form {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 10px;
+    }
+    .network-actions {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+      gap: 10px;
+    }
+    .network-list {
+      display: grid;
+      gap: 8px;
+      min-height: 28px;
+    }
+    .network-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 86px;
+      gap: 10px;
+      align-items: center;
+      background: #151515;
+      border: 1px solid #303030;
+      border-radius: 10px;
+      padding: 10px;
+    }
+    .network-name {
+      overflow-wrap: anywhere;
+      line-height: 1.3;
+    }
+    .network-meta {
+      color: #9b9b9b;
+      font-size: 12px;
+      margin-top: 4px;
+    }
+    .network-row button,
+    .network-actions button {
+      padding: 11px;
+      font-size: 14px;
+    }
     input[type="range"] {
       width: 100%;
     }
@@ -344,6 +419,52 @@ String htmlPage() {
           value="BRIGHTNESS_VALUE"
         >
       </div>
+    </div>
+
+    <div class="subhead">Network</div>
+    <div class="control-panel">
+      <div class="diagnostic-grid">
+        <div class="diagnostic">
+          <span class="label">AP Network</span>
+          CarRadio
+        </div>
+        <div class="diagnostic">
+          <span class="label">AP Address</span>
+          192.168.4.1
+        </div>
+        <div class="diagnostic">
+          <span class="label">Station Status</span>
+          <span id="wifiStatusValue">WIFI_STA_STATUS</span>
+        </div>
+        <div class="diagnostic">
+          <span class="label">Station Address</span>
+          <span id="wifiIpValue">WIFI_STA_IP</span>
+        </div>
+        <div class="diagnostic">
+          <span class="label">Station Network</span>
+          <span id="wifiSsidValue">WIFI_STA_SSID</span>
+        </div>
+        <div class="diagnostic">
+          <span class="label">Saved Credentials</span>
+          <span id="wifiSavedValue">WIFI_STA_SAVED</span>
+        </div>
+      </div>
+      <div class="network-form">
+        <label class="manual-field">
+          <span class="label">SSID</span>
+          <input id="wifiSsidInput" type="text" value="">
+        </label>
+        <label class="manual-field">
+          <span class="label">Password</span>
+          <input id="wifiPasswordInput" type="password" value="">
+        </label>
+        <div class="network-actions">
+          <button class="secondary" id="wifiScanButton" type="button">Scan</button>
+          <button class="tertiary" id="wifiConnectButton" type="button">Connect</button>
+          <button class="warning" id="wifiDisconnectButton" type="button">Disconnect</button>
+        </div>
+      </div>
+      <div class="network-list" id="wifiNetworkList">No scan results yet.</div>
     </div>
 
     <div class="subhead">Steering Input</div>
@@ -560,6 +681,16 @@ String htmlPage() {
     const rightMvInput = document.getElementById('rightMvInput');
     const thresholdInput = document.getElementById('thresholdInput');
     const calibrationButtons = document.querySelectorAll('[data-calibrate]');
+    const wifiStatusValue = document.getElementById('wifiStatusValue');
+    const wifiIpValue = document.getElementById('wifiIpValue');
+    const wifiSsidValue = document.getElementById('wifiSsidValue');
+    const wifiSavedValue = document.getElementById('wifiSavedValue');
+    const wifiSsidInput = document.getElementById('wifiSsidInput');
+    const wifiPasswordInput = document.getElementById('wifiPasswordInput');
+    const wifiScanButton = document.getElementById('wifiScanButton');
+    const wifiConnectButton = document.getElementById('wifiConnectButton');
+    const wifiDisconnectButton = document.getElementById('wifiDisconnectButton');
+    const wifiNetworkList = document.getElementById('wifiNetworkList');
     let submitTimer = 0;
 
     function sendSetUpdate(params) {
@@ -613,7 +744,15 @@ String htmlPage() {
       }
     }
 
+    function applyWifiState(state) {
+      wifiStatusValue.textContent = state.wifi_sta_status;
+      wifiIpValue.textContent = state.wifi_sta_ip;
+      wifiSsidValue.textContent = state.wifi_sta_ssid || 'None';
+      wifiSavedValue.textContent = state.wifi_sta_saved ? 'Yes' : 'No';
+    }
+
     function applySteeringState(state) {
+      applyWifiState(state);
       steeringSlider.value = state.steering_angle;
       steeringWheel.style.transform = 'rotate(' + state.steering_angle + 'deg)';
       steeringValue.textContent = state.steering_angle;
@@ -645,6 +784,76 @@ String htmlPage() {
         .catch(() => {});
     }
 
+    function setWifiMessage(message) {
+      wifiNetworkList.textContent = message;
+    }
+
+    function renderWifiNetworks(networks) {
+      wifiNetworkList.innerHTML = '';
+      if (!networks.length) {
+        setWifiMessage('No networks found.');
+        return;
+      }
+
+      networks.forEach(network => {
+        const row = document.createElement('div');
+        row.className = 'network-row';
+
+        const details = document.createElement('div');
+        const name = document.createElement('div');
+        name.className = 'network-name';
+        name.textContent = network.ssid || '(hidden network)';
+        const meta = document.createElement('div');
+        meta.className = 'network-meta';
+        meta.textContent = network.rssi + ' dBm - channel ' + network.channel + (network.secure ? ' - secured' : ' - open');
+        details.appendChild(name);
+        details.appendChild(meta);
+
+        const button = document.createElement('button');
+        button.className = 'secondary';
+        button.type = 'button';
+        button.textContent = 'Use';
+        button.addEventListener('click', () => {
+          wifiSsidInput.value = network.ssid;
+          wifiPasswordInput.focus();
+        });
+
+        row.appendChild(details);
+        row.appendChild(button);
+        wifiNetworkList.appendChild(row);
+      });
+    }
+
+    function scanWifiNetworks() {
+      setWifiMessage('Scanning...');
+      fetch('/wifi/scan')
+        .then(response => response.json())
+        .then(data => renderWifiNetworks(data.networks || []))
+        .catch(() => setWifiMessage('Scan failed.'));
+    }
+
+    function connectWifiNetwork() {
+      const params = new URLSearchParams();
+      params.set('ssid', wifiSsidInput.value);
+      params.set('password', wifiPasswordInput.value);
+      fetch('/wifi/connect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: params.toString()
+      })
+        .then(() => {
+          wifiPasswordInput.value = '';
+          pollSteeringState();
+        })
+        .catch(() => setWifiMessage('Connect request failed.'));
+    }
+
+    function disconnectWifiNetwork() {
+      fetch('/wifi/disconnect', { method: 'POST' })
+        .then(() => pollSteeringState())
+        .catch(() => setWifiMessage('Disconnect request failed.'));
+    }
+
     thresholdSlider.addEventListener('input', updateThresholdPreview);
     thresholdSlider.addEventListener('change', sendThresholdChange);
     brightnessSlider.addEventListener('input', updateBrightnessPreview);
@@ -656,6 +865,9 @@ String htmlPage() {
     calibrationButtons.forEach(button => {
       button.addEventListener('click', () => sendCalibrationCapture(button.dataset.calibrate));
     });
+    wifiScanButton.addEventListener('click', scanWifiNetworks);
+    wifiConnectButton.addEventListener('click', connectWifiNetwork);
+    wifiDisconnectButton.addEventListener('click', disconnectWifiNetwork);
     pollSteeringState();
     setInterval(pollSteeringState, 250);
   </script>
@@ -698,6 +910,10 @@ String htmlPage() {
   html.replace("CALIBRATION_STATUS", calibrationStatusValue);
   html.replace("CALIBRATION_VALID", calibrationValidValue);
   html.replace("BRIGHTNESS_VALUE", brightnessValue);
+  html.replace("WIFI_STA_STATUS", wifiStaStatusValue);
+  html.replace("WIFI_STA_IP", wifiStaIpValue);
+  html.replace("WIFI_STA_SSID", wifiStaSsidValue);
+  html.replace("WIFI_STA_SAVED", wifiStaSavedValue);
   html.replace("TURN_THRESHOLD", turnThresholdValue);
   html.replace("TURN_SIGNAL_VALUE", turnSignalValue);
   html.replace("TURN_SIGNAL_OUTPUT", turnSignalOutputValue);
@@ -739,7 +955,7 @@ String stateJson() {
     json += "false";
   }
   json += ",\"calibration_status\":\"";
-  json += steeringCalibrationStatusLabel();
+  json += jsonEscape(steeringCalibrationStatusLabel());
   json += "\"";
   json += ",\"steering_valid\":";
   if (steeringInputValid) {
@@ -748,22 +964,97 @@ String stateJson() {
     json += "false";
   }
   json += ",\"steering_status\":\"";
-  json += steeringInputStatusLabel();
+  json += jsonEscape(steeringInputStatusLabel());
   json += "\"";
   json += ",\"turn_signal\":\"";
-  json += turnSignalLabel();
+  json += jsonEscape(turnSignalLabel());
   json += "\"";
   json += ",\"turn_signal_output\":\"";
-  json += turnSignalOutputLabel();
+  json += jsonEscape(turnSignalOutputLabel());
   json += "\"";
   json += ",\"brightness\":";
   json += String(screenBrightnessPercent);
+  json += ",\"wifi_sta_status\":\"";
+  json += jsonEscape(wifiStationStatusLabel());
+  json += "\"";
+  json += ",\"wifi_sta_ip\":\"";
+  json += jsonEscape(wifiStationIpLabel());
+  json += "\"";
+  json += ",\"wifi_sta_ssid\":\"";
+  json += jsonEscape(wifiStaSsid);
+  json += "\"";
+  json += ",\"wifi_sta_saved\":";
+  if (wifiStaCredentialsSaved) {
+    json += "true";
+  } else {
+    json += "false";
+  }
   json += "}";
   return json;
 }
 
 void handleState() {
   server.send(200, "application/json", stateJson());
+}
+
+void handleWifiScan() {
+  int networkCount = WiFi.scanNetworks(false, true);
+  String json = "{\"networks\":[";
+
+  for (int i = 0; i < networkCount; i++) {
+    if (i > 0) {
+      json += ",";
+    }
+
+    wifi_auth_mode_t encryptionType = WiFi.encryptionType(i);
+    bool secure = encryptionType != WIFI_AUTH_OPEN;
+    json += "{\"ssid\":\"";
+    json += jsonEscape(WiFi.SSID(i));
+    json += "\",\"rssi\":";
+    json += String(WiFi.RSSI(i));
+    json += ",\"channel\":";
+    json += String(WiFi.channel(i));
+    json += ",\"secure\":";
+    json += secure ? "true" : "false";
+    json += "}";
+  }
+
+  json += "]}";
+  WiFi.scanDelete();
+  server.send(200, "application/json", json);
+}
+
+void handleWifiConnect() {
+  if (!server.hasArg("ssid")) {
+    server.send(400, "application/json", "{\"error\":\"ssid required\"}");
+    return;
+  }
+
+  String requestedSsid = server.arg("ssid");
+  String requestedPassword = server.hasArg("password") ? server.arg("password") : String("");
+  requestedSsid.trim();
+
+  if (requestedSsid.length() == 0) {
+    server.send(400, "application/json", "{\"error\":\"ssid required\"}");
+    return;
+  }
+
+  saveWifiStationCredentials(requestedSsid, requestedPassword);
+  WiFi.disconnect(false, false);
+  WiFi.mode(WIFI_AP_STA);
+  beginWifiStation();
+
+  String json = "{\"status\":\"connecting\",\"ssid\":\"";
+  json += jsonEscape(wifiStaSsid);
+  json += "\"}";
+  server.send(200, "application/json", json);
+}
+
+void handleWifiDisconnect() {
+  WiFi.disconnect(false, false);
+  WiFi.mode(WIFI_AP_STA);
+  clearWifiStationCredentials();
+  server.send(200, "application/json", "{\"status\":\"disconnected\"}");
 }
 
 void handleSet() {
