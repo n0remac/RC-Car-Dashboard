@@ -39,6 +39,7 @@ static const int SCREEN_BRIGHTNESS_MAX_PERCENT = 100;
 static const int SCREEN_BRIGHTNESS_DEFAULT_PERCENT = 5;
 
 int screenBrightnessPercent = SCREEN_BRIGHTNESS_DEFAULT_PERCENT;
+bool screenSpriteAvailable = false;
 
 // ----------------------
 // IMU / I2C config
@@ -145,6 +146,7 @@ const unsigned long TILT_RENDER_INTERVAL_MS = 50;
 // Cross-tab declarations
 // ----------------------
 String htmlPage();
+String jsonEscape(const String &value);
 void handleRoot();
 void handleState();
 void handleSet();
@@ -159,10 +161,41 @@ void updateGps();
 void updateSpeedFusion();
 void resetSpeedFusion();
 
+void initBluetoothSpeaker();
+bool initSpeakerI2s();
+bool prepareSpeakerI2sForLocalAudio();
+bool speakerI2sStarted();
+String speakerI2sStatusLabel();
+bool bluetoothSpeakerStarted();
+String bluetoothSpeakerName();
+String bluetoothSpeakerStatusLabel();
+String bluetoothSpeakerPinsLabel();
+String bluetoothConnectionStateLabel();
+String bluetoothAudioStateLabel();
+bool bluetoothAvrcConnected();
+uint16_t bluetoothSampleRate();
+
+void initLocalAudioStorage();
+void updateLocalAudioPlayback();
+bool localAudioIsPlaying();
+bool localAudioStorageReady();
+size_t localAudioStorageTotalBytes();
+size_t localAudioStorageUsedBytes();
+size_t localAudioStorageFreeBytes();
+bool localAudioFileSaved();
+size_t localAudioFileSize();
+String localAudioFileInfoLabel();
+String localAudioStatusLabel();
+void handleLocalAudioUpload();
+void handleLocalAudioUploadComplete();
+void handleLocalAudioPlay();
+void handleLocalAudioStop();
+
 bool initBME280();
 void updateEnvironment();
 void updateIMU();
 void renderCurrentScreen();
+void renderSpriteUnavailableScreen();
 void loadScreenBrightness();
 void saveScreenBrightness();
 void applyScreenBrightness();
@@ -172,6 +205,7 @@ void loadWifiStationCredentials();
 void saveWifiStationCredentials(const String &ssid, const String &password);
 void clearWifiStationCredentials();
 void beginWifiStation();
+bool wifiStationDisabledForBluetooth();
 String wifiStationStatusLabel();
 String wifiStationIpLabel();
 void applyTiltOrientation();
@@ -426,6 +460,11 @@ void clearWifiStationCredentials() {
 }
 
 void beginWifiStation() {
+  if (wifiStationDisabledForBluetooth()) {
+    Serial.println("Station WiFi disabled while Bluetooth audio is active");
+    return;
+  }
+
   if (wifiStaSsid.length() == 0) {
     return;
   }
@@ -436,18 +475,32 @@ void beginWifiStation() {
 }
 
 void initWifi() {
-  WiFi.mode(WIFI_AP_STA);
+  loadWifiStationCredentials();
+
+  if (wifiStationDisabledForBluetooth()) {
+    WiFi.mode(WIFI_AP);
+  } else {
+    WiFi.mode(WIFI_AP_STA);
+  }
+
   WiFi.softAP(AP_SSID, AP_PASSWORD);
 
   IPAddress apIp = WiFi.softAPIP();
   Serial.print("AP IP address: ");
   Serial.println(apIp);
 
-  loadWifiStationCredentials();
   beginWifiStation();
 }
 
+bool wifiStationDisabledForBluetooth() {
+  return bluetoothSpeakerStarted();
+}
+
 String wifiStationStatusLabel() {
+  if (wifiStationDisabledForBluetooth()) {
+    return "Disabled for Bluetooth";
+  }
+
   wl_status_t status = WiFi.status();
   if (status == WL_CONNECTED) {
     return "Connected";
@@ -472,6 +525,10 @@ String wifiStationStatusLabel() {
 }
 
 String wifiStationIpLabel() {
+  if (wifiStationDisabledForBluetooth()) {
+    return "AP only";
+  }
+
   if (WiFi.status() == WL_CONNECTED) {
     return WiFi.localIP().toString();
   }
@@ -720,7 +777,23 @@ String steeringCalibrationStatusLabel() {
 // ----------------------
 // Rendering
 // ----------------------
+void renderSpriteUnavailableScreen() {
+  tft.fillScreen(TFT_BLACK);
+  tft.setTextDatum(TL_DATUM);
+  tft.setTextColor(TFT_RED, TFT_BLACK);
+  tft.drawString("Dashboard display buffer failed", 8, 10, 2);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.drawString("Web controls may still be available.", 8, 34, 1);
+  tft.drawString(String("Bluetooth: ") + bluetoothSpeakerStatusLabel(), 8, 50, 1);
+  tft.drawString(String("AP: ") + AP_SSID, 8, 66, 1);
+}
+
 void renderCurrentScreen() {
+  if (!screenSpriteAvailable) {
+    renderSpriteUnavailableScreen();
+    return;
+  }
+
   renderGaugeScreen(spr);
   spr.pushSprite(0, 0);
 }
@@ -748,9 +821,17 @@ void setup() {
   tft.init();
   tft.setRotation(1);
 
-  spr.setColorDepth(16);
-  spr.createSprite(SCREEN_W, SCREEN_H);
-  spr.fillSprite(TFT_BLACK);
+  initLocalAudioStorage();
+  // initBluetoothSpeaker();
+
+  spr.setColorDepth(8);
+  screenSpriteAvailable = spr.createSprite(SCREEN_W, SCREEN_H) != nullptr;
+  if (screenSpriteAvailable) {
+    spr.fillSprite(TFT_BLACK);
+  } else {
+    Serial.println("Dashboard sprite allocation failed; using direct TFT fallback");
+    renderSpriteUnavailableScreen();
+  }
 
   initWifi();
 
@@ -782,6 +863,9 @@ void setup() {
   server.on("/wifi/scan", HTTP_GET, handleWifiScan);
   server.on("/wifi/connect", HTTP_POST, handleWifiConnect);
   server.on("/wifi/disconnect", HTTP_POST, handleWifiDisconnect);
+  server.on("/audio/upload", HTTP_POST, handleLocalAudioUploadComplete, handleLocalAudioUpload);
+  server.on("/audio/play", HTTP_POST, handleLocalAudioPlay);
+  server.on("/audio/stop", HTTP_POST, handleLocalAudioStop);
   server.begin();
 
   renderCurrentScreen();
@@ -791,6 +875,7 @@ void loop() {
   updateSteeringInput();
   updateTurnSignalOutputs();
   server.handleClient();
+  updateLocalAudioPlayback();
   updateGps();
   updateIMU();
   updateSpeedFusion();
@@ -813,5 +898,7 @@ void loop() {
     renderCurrentScreen();
   }
 
-  delay(20);
+  if (!localAudioIsPlaying()) {
+    delay(20);
+  }
 }

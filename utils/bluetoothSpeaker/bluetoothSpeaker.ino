@@ -5,9 +5,9 @@
 const char *BT_SPEAKER_NAME = "ESP32-TDisplay-Speaker";
 
 // ESP32 -> MAX98357 pins
-#define I2S_BCLK 26   // GPIO26 -> MAX98357 BCLK / BCK
-#define I2S_LRC  25   // GPIO25 -> MAX98357 LRC / WS
-#define I2S_DOUT 22   // GPIO22 -> MAX98357 DIN
+#define I2S_BCLK 17   // GPIO26 -> MAX98357 BCLK / BCK
+#define I2S_LRC  13   // GPIO25 -> MAX98357 LRC / WS
+#define I2S_DOUT 15   // GPIO22 -> MAX98357 DIN
 
 I2SStream i2s;
 BluetoothA2DPSink a2dp_sink(i2s);

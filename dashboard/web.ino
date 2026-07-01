@@ -75,6 +75,25 @@ String htmlPage() {
   String wifiStaStatusValue = wifiStationStatusLabel();
   String wifiStaIpValue = wifiStationIpLabel();
   String wifiStaSavedValue = wifiStaCredentialsSaved ? String("Yes") : String("No");
+  String btSpeakerStatusValue = bluetoothSpeakerStatusLabel();
+  String btSpeakerNameValue = bluetoothSpeakerName();
+  String btSpeakerPinsValue = bluetoothSpeakerPinsLabel();
+  String btConnectionStateValue = bluetoothConnectionStateLabel();
+  String btAudioStateValue = bluetoothAudioStateLabel();
+  String btAvrcConnectedValue = bluetoothAvrcConnected() ? String("Yes") : String("No");
+  String btSampleRateValue = "Pending";
+  if (bluetoothSampleRate() > 0) {
+    btSampleRateValue = String(bluetoothSampleRate()) + " Hz";
+  }
+  String audioStorageStatusValue = localAudioStorageReady() ? String("Ready") : String("Unavailable");
+  String audioStorageUsedValue = String((unsigned long)localAudioStorageUsedBytes()) + " / " +
+    String((unsigned long)localAudioStorageTotalBytes()) + " B";
+  String audioStorageFreeValue = String((unsigned long)localAudioStorageFreeBytes()) + " B";
+  String audioFileSavedValue = localAudioFileSaved() ? String("Yes") : String("No");
+  String audioFileSizeValue = String((unsigned long)localAudioFileSize()) + " B";
+  String audioFileInfoValue = localAudioFileInfoLabel();
+  String audioPlaybackValue = localAudioIsPlaying() ? String("Playing") : String("Stopped");
+  String audioStatusValue = localAudioStatusLabel();
 
   String html = R"HTML(
 <!DOCTYPE html>
@@ -289,6 +308,17 @@ String htmlPage() {
       padding: 11px;
       font-size: 14px;
     }
+    .audio-actions {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+      gap: 10px;
+    }
+    .audio-message {
+      color: #d8d8d8;
+      font-size: 14px;
+      line-height: 1.4;
+      min-height: 20px;
+    }
     input[type="range"] {
       width: 100%;
     }
@@ -314,6 +344,10 @@ String htmlPage() {
     button.warning {
       background: #c2410c;
     }
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.45;
+    }
     .small {
       color: #9b9b9b;
       margin-top: 16px;
@@ -337,6 +371,16 @@ String htmlPage() {
         <span class="label">Display</span>
         Unified Dashboard<br>
         Brightness: <span id="brightnessStatusValue">BRIGHTNESS_VALUE</span>%
+      </div>
+      <div class="status">
+        <span class="label">Bluetooth Audio</span>
+        <span id="bluetoothStatusValue">BT_SPEAKER_STATUS</span><br>
+        <span id="bluetoothNameValue">BT_SPEAKER_NAME</span><br>
+        <span id="bluetoothPinsValue">BT_I2S_PINS</span><br>
+        A2DP: <span id="bluetoothConnectionValue">BT_CONNECTION_STATE</span><br>
+        Audio: <span id="bluetoothAudioValue">BT_AUDIO_STATE</span><br>
+        AVRCP: <span id="bluetoothAvrcValue">BT_AVRCP_CONNECTED</span><br>
+        Rate: <span id="bluetoothRateValue">BT_SAMPLE_RATE</span>
       </div>
       <div class="status">
         <span class="label">Environment Sensor</span>
@@ -419,6 +463,54 @@ String htmlPage() {
           value="BRIGHTNESS_VALUE"
         >
       </div>
+    </div>
+
+    <div class="subhead">Local Sound</div>
+    <div class="control-panel">
+      <div class="diagnostic-grid">
+        <div class="diagnostic">
+          <span class="label">Storage</span>
+          <span id="audioStorageStatusValue">AUDIO_STORAGE_STATUS</span>
+        </div>
+        <div class="diagnostic">
+          <span class="label">Used / Total</span>
+          <span id="audioStorageUsedValue">AUDIO_STORAGE_USED</span>
+        </div>
+        <div class="diagnostic">
+          <span class="label">Free</span>
+          <span id="audioStorageFreeValue">AUDIO_STORAGE_FREE</span>
+        </div>
+        <div class="diagnostic">
+          <span class="label">Saved Sound</span>
+          <span id="audioSavedValue">AUDIO_FILE_SAVED</span>
+        </div>
+        <div class="diagnostic">
+          <span class="label">File Size</span>
+          <span id="audioFileSizeValue">AUDIO_FILE_SIZE</span>
+        </div>
+        <div class="diagnostic">
+          <span class="label">Playback</span>
+          <span id="audioPlaybackValue">AUDIO_PLAYBACK</span>
+        </div>
+        <div class="diagnostic">
+          <span class="label">File Info</span>
+          <span id="audioFileInfoValue">AUDIO_FILE_INFO</span>
+        </div>
+        <div class="diagnostic">
+          <span class="label">Status</span>
+          <span id="audioStatusValue">AUDIO_STATUS</span>
+        </div>
+      </div>
+      <label class="manual-field">
+        <span class="label">PCM WAV File</span>
+        <input id="audioFileInput" type="file" accept=".wav,audio/wav">
+      </label>
+      <div class="audio-actions">
+        <button class="secondary" id="audioUploadButton" type="button">Upload</button>
+        <button class="tertiary" id="audioPlayButton" type="button">Play</button>
+        <button class="warning" id="audioStopButton" type="button">Stop</button>
+      </div>
+      <div class="audio-message" id="audioMessageValue">AUDIO_STATUS</div>
     </div>
 
     <div class="subhead">Network</div>
@@ -691,7 +783,38 @@ String htmlPage() {
     const wifiConnectButton = document.getElementById('wifiConnectButton');
     const wifiDisconnectButton = document.getElementById('wifiDisconnectButton');
     const wifiNetworkList = document.getElementById('wifiNetworkList');
+    const bluetoothStatusValue = document.getElementById('bluetoothStatusValue');
+    const bluetoothNameValue = document.getElementById('bluetoothNameValue');
+    const bluetoothPinsValue = document.getElementById('bluetoothPinsValue');
+    const bluetoothConnectionValue = document.getElementById('bluetoothConnectionValue');
+    const bluetoothAudioValue = document.getElementById('bluetoothAudioValue');
+    const bluetoothAvrcValue = document.getElementById('bluetoothAvrcValue');
+    const bluetoothRateValue = document.getElementById('bluetoothRateValue');
+    const audioStorageStatusValue = document.getElementById('audioStorageStatusValue');
+    const audioStorageUsedValue = document.getElementById('audioStorageUsedValue');
+    const audioStorageFreeValue = document.getElementById('audioStorageFreeValue');
+    const audioSavedValue = document.getElementById('audioSavedValue');
+    const audioFileSizeValue = document.getElementById('audioFileSizeValue');
+    const audioPlaybackValue = document.getElementById('audioPlaybackValue');
+    const audioFileInfoValue = document.getElementById('audioFileInfoValue');
+    const audioStatusValue = document.getElementById('audioStatusValue');
+    const audioFileInput = document.getElementById('audioFileInput');
+    const audioUploadButton = document.getElementById('audioUploadButton');
+    const audioPlayButton = document.getElementById('audioPlayButton');
+    const audioStopButton = document.getElementById('audioStopButton');
+    const audioMessageValue = document.getElementById('audioMessageValue');
     let submitTimer = 0;
+
+    function formatBytes(bytes) {
+      const size = Number(bytes) || 0;
+      if (size < 1024) {
+        return size + ' B';
+      }
+      if (size < 1048576) {
+        return (size / 1024).toFixed(1) + ' KB';
+      }
+      return (size / 1048576).toFixed(2) + ' MB';
+    }
 
     function sendSetUpdate(params) {
       clearTimeout(submitTimer);
@@ -751,8 +874,35 @@ String htmlPage() {
       wifiSavedValue.textContent = state.wifi_sta_saved ? 'Yes' : 'No';
     }
 
+    function applyBluetoothState(state) {
+      bluetoothStatusValue.textContent = state.bt_speaker_status;
+      bluetoothNameValue.textContent = state.bt_speaker_name;
+      bluetoothPinsValue.textContent = state.bt_i2s_pins;
+      bluetoothConnectionValue.textContent = state.bt_connection_state;
+      bluetoothAudioValue.textContent = state.bt_audio_state;
+      bluetoothAvrcValue.textContent = state.bt_avrc_connected ? 'Yes' : 'No';
+      bluetoothRateValue.textContent = state.bt_sample_rate > 0 ? state.bt_sample_rate + ' Hz' : 'Pending';
+    }
+
+    function applyAudioState(state) {
+      audioStorageStatusValue.textContent = state.audio_storage_ready ? 'Ready' : 'Unavailable';
+      audioStorageUsedValue.textContent = formatBytes(state.audio_storage_used) + ' / ' + formatBytes(state.audio_storage_total);
+      audioStorageFreeValue.textContent = formatBytes(state.audio_storage_free);
+      audioSavedValue.textContent = state.audio_file_saved ? 'Yes' : 'No';
+      audioFileSizeValue.textContent = formatBytes(state.audio_file_size);
+      audioPlaybackValue.textContent = state.audio_playing ? 'Playing' : 'Stopped';
+      audioFileInfoValue.textContent = state.audio_file_info;
+      audioStatusValue.textContent = state.audio_status;
+      audioMessageValue.textContent = state.audio_status;
+      audioUploadButton.disabled = !state.audio_storage_ready;
+      audioPlayButton.disabled = !state.audio_storage_ready || !state.audio_file_saved || state.audio_playing;
+      audioStopButton.disabled = !state.audio_playing;
+    }
+
     function applySteeringState(state) {
       applyWifiState(state);
+      applyBluetoothState(state);
+      applyAudioState(state);
       steeringSlider.value = state.steering_angle;
       steeringWheel.style.transform = 'rotate(' + state.steering_angle + 'deg)';
       steeringValue.textContent = state.steering_angle;
@@ -828,8 +978,14 @@ String htmlPage() {
       setWifiMessage('Scanning...');
       fetch('/wifi/scan')
         .then(response => response.json())
+        .then(data => {
+          if (data.error) {
+            throw new Error(data.message || data.error);
+          }
+          return data;
+        })
         .then(data => renderWifiNetworks(data.networks || []))
-        .catch(() => setWifiMessage('Scan failed.'));
+        .catch(error => setWifiMessage(error.message || 'Scan failed.'));
     }
 
     function connectWifiNetwork() {
@@ -841,17 +997,84 @@ String htmlPage() {
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: params.toString()
       })
-        .then(() => {
+        .then(response => response.json())
+        .then(data => {
+          if (data.error) {
+            throw new Error(data.message || data.error);
+          }
           wifiPasswordInput.value = '';
           pollSteeringState();
         })
-        .catch(() => setWifiMessage('Connect request failed.'));
+        .catch(error => setWifiMessage(error.message || 'Connect request failed.'));
     }
 
     function disconnectWifiNetwork() {
       fetch('/wifi/disconnect', { method: 'POST' })
         .then(() => pollSteeringState())
         .catch(() => setWifiMessage('Disconnect request failed.'));
+    }
+
+    function setAudioMessage(message) {
+      audioMessageValue.textContent = message;
+    }
+
+    function handleAudioJsonResponse(response) {
+      return response.json()
+        .then(data => {
+          if (data.message) {
+            setAudioMessage(data.message);
+          }
+          if (typeof data.audio_status === 'string') {
+            audioStatusValue.textContent = data.audio_status;
+          }
+          pollSteeringState();
+          return data;
+        })
+        .catch(() => {
+          setAudioMessage(response.ok ? 'Audio request complete.' : 'Audio request failed.');
+          pollSteeringState();
+        });
+    }
+
+    function uploadLocalAudio() {
+      const file = audioFileInput.files[0];
+      if (!file) {
+        setAudioMessage('Choose a WAV file first.');
+        return;
+      }
+
+      const form = new FormData();
+      form.append('sound', file, file.name);
+      audioUploadButton.disabled = true;
+      setAudioMessage('Uploading...');
+
+      fetch('/audio/upload', {
+        method: 'POST',
+        body: form
+      })
+        .then(handleAudioJsonResponse)
+        .catch(() => {
+          setAudioMessage('Upload request failed.');
+          pollSteeringState();
+        });
+    }
+
+    function playLocalAudio() {
+      fetch('/audio/play', { method: 'POST' })
+        .then(handleAudioJsonResponse)
+        .catch(() => {
+          setAudioMessage('Play request failed.');
+          pollSteeringState();
+        });
+    }
+
+    function stopLocalAudio() {
+      fetch('/audio/stop', { method: 'POST' })
+        .then(handleAudioJsonResponse)
+        .catch(() => {
+          setAudioMessage('Stop request failed.');
+          pollSteeringState();
+        });
     }
 
     thresholdSlider.addEventListener('input', updateThresholdPreview);
@@ -868,6 +1091,9 @@ String htmlPage() {
     wifiScanButton.addEventListener('click', scanWifiNetworks);
     wifiConnectButton.addEventListener('click', connectWifiNetwork);
     wifiDisconnectButton.addEventListener('click', disconnectWifiNetwork);
+    audioUploadButton.addEventListener('click', uploadLocalAudio);
+    audioPlayButton.addEventListener('click', playLocalAudio);
+    audioStopButton.addEventListener('click', stopLocalAudio);
     pollSteeringState();
     setInterval(pollSteeringState, 250);
   </script>
@@ -914,6 +1140,21 @@ String htmlPage() {
   html.replace("WIFI_STA_IP", wifiStaIpValue);
   html.replace("WIFI_STA_SSID", wifiStaSsidValue);
   html.replace("WIFI_STA_SAVED", wifiStaSavedValue);
+  html.replace("BT_SPEAKER_STATUS", btSpeakerStatusValue);
+  html.replace("BT_SPEAKER_NAME", btSpeakerNameValue);
+  html.replace("BT_I2S_PINS", btSpeakerPinsValue);
+  html.replace("BT_CONNECTION_STATE", btConnectionStateValue);
+  html.replace("BT_AUDIO_STATE", btAudioStateValue);
+  html.replace("BT_AVRCP_CONNECTED", btAvrcConnectedValue);
+  html.replace("BT_SAMPLE_RATE", btSampleRateValue);
+  html.replace("AUDIO_STORAGE_STATUS", audioStorageStatusValue);
+  html.replace("AUDIO_STORAGE_USED", audioStorageUsedValue);
+  html.replace("AUDIO_STORAGE_FREE", audioStorageFreeValue);
+  html.replace("AUDIO_FILE_SAVED", audioFileSavedValue);
+  html.replace("AUDIO_FILE_SIZE", audioFileSizeValue);
+  html.replace("AUDIO_FILE_INFO", audioFileInfoValue);
+  html.replace("AUDIO_PLAYBACK", audioPlaybackValue);
+  html.replace("AUDIO_STATUS", audioStatusValue);
   html.replace("TURN_THRESHOLD", turnThresholdValue);
   html.replace("TURN_SIGNAL_VALUE", turnSignalValue);
   html.replace("TURN_SIGNAL_OUTPUT", turnSignalOutputValue);
@@ -989,6 +1230,67 @@ String stateJson() {
   } else {
     json += "false";
   }
+  json += ",\"bt_speaker_started\":";
+  if (bluetoothSpeakerStarted()) {
+    json += "true";
+  } else {
+    json += "false";
+  }
+  json += ",\"bt_speaker_name\":\"";
+  json += jsonEscape(bluetoothSpeakerName());
+  json += "\"";
+  json += ",\"bt_speaker_status\":\"";
+  json += jsonEscape(bluetoothSpeakerStatusLabel());
+  json += "\"";
+  json += ",\"bt_i2s_pins\":\"";
+  json += jsonEscape(bluetoothSpeakerPinsLabel());
+  json += "\"";
+  json += ",\"bt_connection_state\":\"";
+  json += jsonEscape(bluetoothConnectionStateLabel());
+  json += "\"";
+  json += ",\"bt_audio_state\":\"";
+  json += jsonEscape(bluetoothAudioStateLabel());
+  json += "\"";
+  json += ",\"bt_avrc_connected\":";
+  if (bluetoothAvrcConnected()) {
+    json += "true";
+  } else {
+    json += "false";
+  }
+  json += ",\"bt_sample_rate\":";
+  json += String(bluetoothSampleRate());
+  json += ",\"audio_storage_ready\":";
+  if (localAudioStorageReady()) {
+    json += "true";
+  } else {
+    json += "false";
+  }
+  json += ",\"audio_storage_total\":";
+  json += String((unsigned long)localAudioStorageTotalBytes());
+  json += ",\"audio_storage_used\":";
+  json += String((unsigned long)localAudioStorageUsedBytes());
+  json += ",\"audio_storage_free\":";
+  json += String((unsigned long)localAudioStorageFreeBytes());
+  json += ",\"audio_file_saved\":";
+  if (localAudioFileSaved()) {
+    json += "true";
+  } else {
+    json += "false";
+  }
+  json += ",\"audio_file_size\":";
+  json += String((unsigned long)localAudioFileSize());
+  json += ",\"audio_file_info\":\"";
+  json += jsonEscape(localAudioFileInfoLabel());
+  json += "\"";
+  json += ",\"audio_playing\":";
+  if (localAudioIsPlaying()) {
+    json += "true";
+  } else {
+    json += "false";
+  }
+  json += ",\"audio_status\":\"";
+  json += jsonEscape(localAudioStatusLabel());
+  json += "\"";
   json += "}";
   return json;
 }
@@ -998,6 +1300,11 @@ void handleState() {
 }
 
 void handleWifiScan() {
+  if (wifiStationDisabledForBluetooth()) {
+    server.send(409, "application/json", "{\"error\":\"station_wifi_disabled_for_bluetooth\",\"message\":\"Station WiFi scan is disabled while Bluetooth audio is active.\"}");
+    return;
+  }
+
   int networkCount = WiFi.scanNetworks(false, true);
   String json = "{\"networks\":[";
 
@@ -1025,6 +1332,11 @@ void handleWifiScan() {
 }
 
 void handleWifiConnect() {
+  if (wifiStationDisabledForBluetooth()) {
+    server.send(409, "application/json", "{\"error\":\"station_wifi_disabled_for_bluetooth\",\"message\":\"Station WiFi connect is disabled while Bluetooth audio is active.\"}");
+    return;
+  }
+
   if (!server.hasArg("ssid")) {
     server.send(400, "application/json", "{\"error\":\"ssid required\"}");
     return;
@@ -1052,7 +1364,11 @@ void handleWifiConnect() {
 
 void handleWifiDisconnect() {
   WiFi.disconnect(false, false);
-  WiFi.mode(WIFI_AP_STA);
+  if (wifiStationDisabledForBluetooth()) {
+    WiFi.mode(WIFI_AP);
+  } else {
+    WiFi.mode(WIFI_AP_STA);
+  }
   clearWifiStationCredentials();
   server.send(200, "application/json", "{\"status\":\"disconnected\"}");
 }
