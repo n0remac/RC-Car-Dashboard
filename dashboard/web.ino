@@ -65,6 +65,22 @@ String htmlPage() {
   String steeringValidValue = steeringInputValid ? String("Yes") : String("No");
   String turnSignalValue = turnSignalLabel();
   String turnSignalOutputValue = turnSignalOutputLabel();
+  String turnSignalInputStatusValue = turnSignalInputPulseStatusLabel();
+  String turnSignalInputRawValue = turnSignalInputRawLabel();
+  String turnSignalInputPulseValue = turnSignalInputPulseWidthUs > 0 ?
+    String(turnSignalInputPulseWidthUs) :
+    String("--");
+  String turnSignalInputPulseAgeValue = turnSignalInputPulseWidthUs > 0 ?
+    String(turnSignalInputPulseAgeMs) :
+    String("--");
+  String headlightStateValue = headlightInputStatusLabel();
+  String headlightRawValue = headlightInputRawLabel();
+  String headlightPulseValue = headlightInputPulseWidthUs > 0 ?
+    String(headlightInputPulseWidthUs) :
+    String("--");
+  String headlightPulseAgeValue = headlightInputPulseWidthUs > 0 ?
+    String(headlightInputPulseAgeMs) :
+    String("--");
   String steeringCenterValue = String(steeringCenterMv);
   String steeringLeftValue = String(steeringLeftMv);
   String steeringRightValue = String(steeringRightMv);
@@ -355,7 +371,7 @@ String htmlPage() {
   <div class="card">
     <h1>CarDashboard</h1>
     <div class="lede">
-      The display stays on a single combined dashboard panel. Tilt, temperature, GPS, and fused speed are live; the remaining indicators are still fixed demo values.
+      The display stays on a single combined dashboard panel. Tilt, temperature, GPS, fused speed, turn signals, and headlights are live; the remaining indicators are still fixed demo values.
     </div>
 
     <div class="status-grid">
@@ -594,6 +610,38 @@ String htmlPage() {
           <span id="turnSignalOutputValue">TURN_SIGNAL_OUTPUT</span>
         </div>
         <div class="diagnostic">
+          <span class="label">GPIO32 Pulse Status</span>
+          <span id="turnSignalInputStatusValue">TURN_SIGNAL_INPUT_STATUS</span>
+        </div>
+        <div class="diagnostic">
+          <span class="label">GPIO32 Level</span>
+          <span id="turnSignalInputRawValue">TURN_SIGNAL_INPUT_RAW</span>
+        </div>
+        <div class="diagnostic">
+          <span class="label">GPIO32 Pulse</span>
+          <span id="turnSignalInputPulseValue">TURN_SIGNAL_INPUT_PULSE</span>
+        </div>
+        <div class="diagnostic">
+          <span class="label">GPIO32 Pulse Age</span>
+          <span id="turnSignalInputPulseAgeValue">TURN_SIGNAL_INPUT_PULSE_AGE</span>
+        </div>
+        <div class="diagnostic">
+          <span class="label">Headlights</span>
+          <span id="headlightStateValue">HEADLIGHT_STATE</span>
+        </div>
+        <div class="diagnostic">
+          <span class="label">GPIO12 Raw</span>
+          <span id="headlightRawValue">HEADLIGHT_RAW</span>
+        </div>
+        <div class="diagnostic">
+          <span class="label">GPIO12 Pulse</span>
+          <span id="headlightPulseValue">HEADLIGHT_PULSE</span>
+        </div>
+        <div class="diagnostic">
+          <span class="label">Pulse Age</span>
+          <span id="headlightPulseAgeValue">HEADLIGHT_PULSE_AGE</span>
+        </div>
+        <div class="diagnostic">
           <span class="label">Observed Min / Max</span>
           <span id="steeringRangeValue">STEERING_MIN_MV / STEERING_MAX_MV</span> mV
         </div>
@@ -752,6 +800,14 @@ String htmlPage() {
     const steeringRangeValue = document.getElementById('steeringRangeValue');
     const turnSignalValue = document.getElementById('turnSignalValue');
     const turnSignalOutputValue = document.getElementById('turnSignalOutputValue');
+    const turnSignalInputStatusValue = document.getElementById('turnSignalInputStatusValue');
+    const turnSignalInputRawValue = document.getElementById('turnSignalInputRawValue');
+    const turnSignalInputPulseValue = document.getElementById('turnSignalInputPulseValue');
+    const turnSignalInputPulseAgeValue = document.getElementById('turnSignalInputPulseAgeValue');
+    const headlightStateValue = document.getElementById('headlightStateValue');
+    const headlightRawValue = document.getElementById('headlightRawValue');
+    const headlightPulseValue = document.getElementById('headlightPulseValue');
+    const headlightPulseAgeValue = document.getElementById('headlightPulseAgeValue');
     const calibrationStatusValue = document.getElementById('calibrationStatusValue');
     const centerMvValue = document.getElementById('centerMvValue');
     const leftRightMvValue = document.getElementById('leftRightMvValue');
@@ -886,6 +942,14 @@ String htmlPage() {
       steeringRangeValue.textContent = state.steering_min_mv + ' / ' + state.steering_max_mv;
       turnSignalValue.textContent = state.turn_signal;
       turnSignalOutputValue.textContent = state.turn_signal_output;
+      turnSignalInputStatusValue.textContent = state.turn_signal_input_status;
+      turnSignalInputRawValue.textContent = state.turn_signal_input_raw;
+      turnSignalInputPulseValue.textContent = state.turn_signal_input_pulse_us > 0 ? state.turn_signal_input_pulse_us + ' us' : '--';
+      turnSignalInputPulseAgeValue.textContent = state.turn_signal_input_pulse_us > 0 ? state.turn_signal_input_pulse_age_ms + ' ms' : '--';
+      headlightStateValue.textContent = state.headlight_status;
+      headlightRawValue.textContent = state.headlight_raw;
+      headlightPulseValue.textContent = state.headlight_pulse_us > 0 ? state.headlight_pulse_us + ' us' : '--';
+      headlightPulseAgeValue.textContent = state.headlight_pulse_us > 0 ? state.headlight_pulse_age_ms + ' ms' : '--';
       calibrationStatusValue.textContent = state.calibration_status;
       brightnessSlider.value = state.brightness;
       brightnessValue.textContent = state.brightness;
@@ -1126,6 +1190,20 @@ String htmlPage() {
   html.replace("TURN_THRESHOLD", turnThresholdValue);
   html.replace("TURN_SIGNAL_VALUE", turnSignalValue);
   html.replace("TURN_SIGNAL_OUTPUT", turnSignalOutputValue);
+  html.replace("TURN_SIGNAL_INPUT_STATUS", turnSignalInputStatusValue);
+  html.replace("TURN_SIGNAL_INPUT_RAW", turnSignalInputRawValue);
+  html.replace(
+    "TURN_SIGNAL_INPUT_PULSE_AGE",
+    turnSignalInputPulseAgeValue == "--" ? turnSignalInputPulseAgeValue : turnSignalInputPulseAgeValue + " ms"
+  );
+  html.replace(
+    "TURN_SIGNAL_INPUT_PULSE",
+    turnSignalInputPulseValue == "--" ? turnSignalInputPulseValue : turnSignalInputPulseValue + " us"
+  );
+  html.replace("HEADLIGHT_STATE", headlightStateValue);
+  html.replace("HEADLIGHT_RAW", headlightRawValue);
+  html.replace("HEADLIGHT_PULSE_AGE", headlightPulseAgeValue == "--" ? headlightPulseAgeValue : headlightPulseAgeValue + " ms");
+  html.replace("HEADLIGHT_PULSE", headlightPulseValue == "--" ? headlightPulseValue : headlightPulseValue + " us");
   return html;
 }
 
@@ -1181,6 +1259,44 @@ String stateJson() {
   json += ",\"turn_signal_output\":\"";
   json += jsonEscape(turnSignalOutputLabel());
   json += "\"";
+  json += ",\"turn_signal_input_status\":\"";
+  json += jsonEscape(turnSignalInputPulseStatusLabel());
+  json += "\"";
+  json += ",\"turn_signal_input_raw\":\"";
+  json += jsonEscape(turnSignalInputRawLabel());
+  json += "\"";
+  json += ",\"turn_signal_input_pulse_fresh\":";
+  if (turnSignalInputPulseFresh) {
+    json += "true";
+  } else {
+    json += "false";
+  }
+  json += ",\"turn_signal_input_pulse_us\":";
+  json += String(turnSignalInputPulseWidthUs);
+  json += ",\"turn_signal_input_pulse_age_ms\":";
+  json += String(turnSignalInputPulseAgeMs);
+  json += ",\"headlights_on\":";
+  if (dashboardHeadlightsOn) {
+    json += "true";
+  } else {
+    json += "false";
+  }
+  json += ",\"headlight_status\":\"";
+  json += jsonEscape(headlightInputStatusLabel());
+  json += "\"";
+  json += ",\"headlight_raw\":\"";
+  json += jsonEscape(headlightInputRawLabel());
+  json += "\"";
+  json += ",\"headlight_pulse_fresh\":";
+  if (headlightInputPulseFresh) {
+    json += "true";
+  } else {
+    json += "false";
+  }
+  json += ",\"headlight_pulse_us\":";
+  json += String(headlightInputPulseWidthUs);
+  json += ",\"headlight_pulse_age_ms\":";
+  json += String(headlightInputPulseAgeMs);
   json += ",\"brightness\":";
   json += String(screenBrightnessPercent);
   json += ",\"wifi_sta_status\":\"";

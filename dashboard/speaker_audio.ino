@@ -32,6 +32,7 @@ bool audioI2sPinConflicts() {
         audioPinMatches(pin, LEFT_TURN_LED_PIN) ||
         audioPinMatches(pin, RIGHT_TURN_LED_PIN) ||
         audioPinMatches(pin, SCREEN_BACKLIGHT_PIN) ||
+        audioPinMatches(pin, HEADLIGHT_INPUT_PIN) ||
         audioPinMatches(pin, STEERING_INPUT_PIN) ||
         audioPinMatches(pin, AUDIO_OWNED_GPS_RX_PIN)) {
       return true;
