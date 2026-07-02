@@ -161,35 +161,30 @@ void updateGps();
 void updateSpeedFusion();
 void resetSpeedFusion();
 
-void initBluetoothSpeaker();
-bool initSpeakerI2s();
-bool prepareSpeakerI2sForLocalAudio();
+bool prepareSpeakerI2sForBrowserAudio(
+  uint32_t sampleRate,
+  uint8_t channels,
+  uint8_t bitsPerSample
+);
 bool speakerI2sStarted();
 String speakerI2sStatusLabel();
-bool bluetoothSpeakerStarted();
-String bluetoothSpeakerName();
-String bluetoothSpeakerStatusLabel();
-String bluetoothSpeakerPinsLabel();
-String bluetoothConnectionStateLabel();
-String bluetoothAudioStateLabel();
-bool bluetoothAvrcConnected();
-uint16_t bluetoothSampleRate();
+String speakerI2sPinsLabel();
 
-void initLocalAudioStorage();
-void updateLocalAudioPlayback();
-bool localAudioIsPlaying();
-bool localAudioStorageReady();
-size_t localAudioStorageTotalBytes();
-size_t localAudioStorageUsedBytes();
-size_t localAudioStorageFreeBytes();
-bool localAudioFileSaved();
-size_t localAudioFileSize();
-String localAudioFileInfoLabel();
-String localAudioStatusLabel();
-void handleLocalAudioUpload();
-void handleLocalAudioUploadComplete();
-void handleLocalAudioPlay();
-void handleLocalAudioStop();
+bool browserAudioIsPlaying();
+void initBrowserAudioStorage();
+void updateBrowserAudioPlayback();
+bool browserAudioStorageReady();
+size_t browserAudioStorageTotalBytes();
+size_t browserAudioStorageUsedBytes();
+size_t browserAudioStorageFreeBytes();
+bool browserAudioFileSaved();
+size_t browserAudioFileSize();
+String browserAudioFileInfoLabel();
+String browserAudioStatusLabel();
+void handleBrowserAudioUpload();
+void handleBrowserAudioUploadComplete();
+void handleBrowserAudioPlay();
+void handleBrowserAudioStop();
 
 bool initBME280();
 void updateEnvironment();
@@ -205,7 +200,6 @@ void loadWifiStationCredentials();
 void saveWifiStationCredentials(const String &ssid, const String &password);
 void clearWifiStationCredentials();
 void beginWifiStation();
-bool wifiStationDisabledForBluetooth();
 String wifiStationStatusLabel();
 String wifiStationIpLabel();
 void applyTiltOrientation();
@@ -460,11 +454,6 @@ void clearWifiStationCredentials() {
 }
 
 void beginWifiStation() {
-  if (wifiStationDisabledForBluetooth()) {
-    Serial.println("Station WiFi disabled while Bluetooth audio is active");
-    return;
-  }
-
   if (wifiStaSsid.length() == 0) {
     return;
   }
@@ -477,12 +466,7 @@ void beginWifiStation() {
 void initWifi() {
   loadWifiStationCredentials();
 
-  if (wifiStationDisabledForBluetooth()) {
-    WiFi.mode(WIFI_AP);
-  } else {
-    WiFi.mode(WIFI_AP_STA);
-  }
-
+  WiFi.mode(WIFI_AP_STA);
   WiFi.softAP(AP_SSID, AP_PASSWORD);
 
   IPAddress apIp = WiFi.softAPIP();
@@ -492,15 +476,7 @@ void initWifi() {
   beginWifiStation();
 }
 
-bool wifiStationDisabledForBluetooth() {
-  return bluetoothSpeakerStarted();
-}
-
 String wifiStationStatusLabel() {
-  if (wifiStationDisabledForBluetooth()) {
-    return "Disabled for Bluetooth";
-  }
-
   wl_status_t status = WiFi.status();
   if (status == WL_CONNECTED) {
     return "Connected";
@@ -525,10 +501,6 @@ String wifiStationStatusLabel() {
 }
 
 String wifiStationIpLabel() {
-  if (wifiStationDisabledForBluetooth()) {
-    return "AP only";
-  }
-
   if (WiFi.status() == WL_CONNECTED) {
     return WiFi.localIP().toString();
   }
@@ -784,7 +756,7 @@ void renderSpriteUnavailableScreen() {
   tft.drawString("Dashboard display buffer failed", 8, 10, 2);
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
   tft.drawString("Web controls may still be available.", 8, 34, 1);
-  tft.drawString(String("Bluetooth: ") + bluetoothSpeakerStatusLabel(), 8, 50, 1);
+  tft.drawString(String("Audio: ") + browserAudioStatusLabel(), 8, 50, 1);
   tft.drawString(String("AP: ") + AP_SSID, 8, 66, 1);
 }
 
@@ -821,8 +793,7 @@ void setup() {
   tft.init();
   tft.setRotation(1);
 
-  initLocalAudioStorage();
-  // initBluetoothSpeaker();
+  initBrowserAudioStorage();
 
   spr.setColorDepth(8);
   screenSpriteAvailable = spr.createSprite(SCREEN_W, SCREEN_H) != nullptr;
@@ -863,9 +834,9 @@ void setup() {
   server.on("/wifi/scan", HTTP_GET, handleWifiScan);
   server.on("/wifi/connect", HTTP_POST, handleWifiConnect);
   server.on("/wifi/disconnect", HTTP_POST, handleWifiDisconnect);
-  server.on("/audio/upload", HTTP_POST, handleLocalAudioUploadComplete, handleLocalAudioUpload);
-  server.on("/audio/play", HTTP_POST, handleLocalAudioPlay);
-  server.on("/audio/stop", HTTP_POST, handleLocalAudioStop);
+  server.on("/audio/upload", HTTP_POST, handleBrowserAudioUploadComplete, handleBrowserAudioUpload);
+  server.on("/audio/play", HTTP_POST, handleBrowserAudioPlay);
+  server.on("/audio/stop", HTTP_POST, handleBrowserAudioStop);
   server.begin();
 
   renderCurrentScreen();
@@ -875,7 +846,7 @@ void loop() {
   updateSteeringInput();
   updateTurnSignalOutputs();
   server.handleClient();
-  updateLocalAudioPlayback();
+  updateBrowserAudioPlayback();
   updateGps();
   updateIMU();
   updateSpeedFusion();
@@ -898,7 +869,7 @@ void loop() {
     renderCurrentScreen();
   }
 
-  if (!localAudioIsPlaying()) {
+  if (!browserAudioIsPlaying()) {
     delay(20);
   }
 }

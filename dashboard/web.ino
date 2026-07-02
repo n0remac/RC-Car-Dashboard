@@ -75,25 +75,17 @@ String htmlPage() {
   String wifiStaStatusValue = wifiStationStatusLabel();
   String wifiStaIpValue = wifiStationIpLabel();
   String wifiStaSavedValue = wifiStaCredentialsSaved ? String("Yes") : String("No");
-  String btSpeakerStatusValue = bluetoothSpeakerStatusLabel();
-  String btSpeakerNameValue = bluetoothSpeakerName();
-  String btSpeakerPinsValue = bluetoothSpeakerPinsLabel();
-  String btConnectionStateValue = bluetoothConnectionStateLabel();
-  String btAudioStateValue = bluetoothAudioStateLabel();
-  String btAvrcConnectedValue = bluetoothAvrcConnected() ? String("Yes") : String("No");
-  String btSampleRateValue = "Pending";
-  if (bluetoothSampleRate() > 0) {
-    btSampleRateValue = String(bluetoothSampleRate()) + " Hz";
-  }
-  String audioStorageStatusValue = localAudioStorageReady() ? String("Ready") : String("Unavailable");
-  String audioStorageUsedValue = String((unsigned long)localAudioStorageUsedBytes()) + " / " +
-    String((unsigned long)localAudioStorageTotalBytes()) + " B";
-  String audioStorageFreeValue = String((unsigned long)localAudioStorageFreeBytes()) + " B";
-  String audioFileSavedValue = localAudioFileSaved() ? String("Yes") : String("No");
-  String audioFileSizeValue = String((unsigned long)localAudioFileSize()) + " B";
-  String audioFileInfoValue = localAudioFileInfoLabel();
-  String audioPlaybackValue = localAudioIsPlaying() ? String("Playing") : String("Stopped");
-  String audioStatusValue = localAudioStatusLabel();
+  String audioOutputStatusValue = speakerI2sStatusLabel();
+  String audioOutputPinsValue = speakerI2sPinsLabel();
+  String audioStorageStatusValue = browserAudioStorageReady() ? String("Ready") : String("Unavailable");
+  String audioStorageUsedValue = String((unsigned long)browserAudioStorageUsedBytes()) + " / " +
+    String((unsigned long)browserAudioStorageTotalBytes()) + " B";
+  String audioStorageFreeValue = String((unsigned long)browserAudioStorageFreeBytes()) + " B";
+  String audioFileSavedValue = browserAudioFileSaved() ? String("Yes") : String("No");
+  String audioFileSizeValue = String((unsigned long)browserAudioFileSize()) + " B";
+  String audioFileInfoValue = browserAudioFileInfoLabel();
+  String audioPlaybackValue = browserAudioIsPlaying() ? String("Playing") : String("Stopped");
+  String audioStatusValue = browserAudioStatusLabel();
 
   String html = R"HTML(
 <!DOCTYPE html>
@@ -373,14 +365,9 @@ String htmlPage() {
         Brightness: <span id="brightnessStatusValue">BRIGHTNESS_VALUE</span>%
       </div>
       <div class="status">
-        <span class="label">Bluetooth Audio</span>
-        <span id="bluetoothStatusValue">BT_SPEAKER_STATUS</span><br>
-        <span id="bluetoothNameValue">BT_SPEAKER_NAME</span><br>
-        <span id="bluetoothPinsValue">BT_I2S_PINS</span><br>
-        A2DP: <span id="bluetoothConnectionValue">BT_CONNECTION_STATE</span><br>
-        Audio: <span id="bluetoothAudioValue">BT_AUDIO_STATE</span><br>
-        AVRCP: <span id="bluetoothAvrcValue">BT_AVRCP_CONNECTED</span><br>
-        Rate: <span id="bluetoothRateValue">BT_SAMPLE_RATE</span>
+        <span class="label">Audio Output</span>
+        <span id="audioOutputStatusValue">AUDIO_OUTPUT_STATUS</span><br>
+        <span id="audioOutputPinsValue">AUDIO_OUTPUT_PINS</span>
       </div>
       <div class="status">
         <span class="label">Environment Sensor</span>
@@ -783,13 +770,8 @@ String htmlPage() {
     const wifiConnectButton = document.getElementById('wifiConnectButton');
     const wifiDisconnectButton = document.getElementById('wifiDisconnectButton');
     const wifiNetworkList = document.getElementById('wifiNetworkList');
-    const bluetoothStatusValue = document.getElementById('bluetoothStatusValue');
-    const bluetoothNameValue = document.getElementById('bluetoothNameValue');
-    const bluetoothPinsValue = document.getElementById('bluetoothPinsValue');
-    const bluetoothConnectionValue = document.getElementById('bluetoothConnectionValue');
-    const bluetoothAudioValue = document.getElementById('bluetoothAudioValue');
-    const bluetoothAvrcValue = document.getElementById('bluetoothAvrcValue');
-    const bluetoothRateValue = document.getElementById('bluetoothRateValue');
+    const audioOutputStatusValue = document.getElementById('audioOutputStatusValue');
+    const audioOutputPinsValue = document.getElementById('audioOutputPinsValue');
     const audioStorageStatusValue = document.getElementById('audioStorageStatusValue');
     const audioStorageUsedValue = document.getElementById('audioStorageUsedValue');
     const audioStorageFreeValue = document.getElementById('audioStorageFreeValue');
@@ -874,17 +856,9 @@ String htmlPage() {
       wifiSavedValue.textContent = state.wifi_sta_saved ? 'Yes' : 'No';
     }
 
-    function applyBluetoothState(state) {
-      bluetoothStatusValue.textContent = state.bt_speaker_status;
-      bluetoothNameValue.textContent = state.bt_speaker_name;
-      bluetoothPinsValue.textContent = state.bt_i2s_pins;
-      bluetoothConnectionValue.textContent = state.bt_connection_state;
-      bluetoothAudioValue.textContent = state.bt_audio_state;
-      bluetoothAvrcValue.textContent = state.bt_avrc_connected ? 'Yes' : 'No';
-      bluetoothRateValue.textContent = state.bt_sample_rate > 0 ? state.bt_sample_rate + ' Hz' : 'Pending';
-    }
-
     function applyAudioState(state) {
+      audioOutputStatusValue.textContent = state.audio_output_status;
+      audioOutputPinsValue.textContent = state.audio_output_pins;
       audioStorageStatusValue.textContent = state.audio_storage_ready ? 'Ready' : 'Unavailable';
       audioStorageUsedValue.textContent = formatBytes(state.audio_storage_used) + ' / ' + formatBytes(state.audio_storage_total);
       audioStorageFreeValue.textContent = formatBytes(state.audio_storage_free);
@@ -901,7 +875,6 @@ String htmlPage() {
 
     function applySteeringState(state) {
       applyWifiState(state);
-      applyBluetoothState(state);
       applyAudioState(state);
       steeringSlider.value = state.steering_angle;
       steeringWheel.style.transform = 'rotate(' + state.steering_angle + 'deg)';
@@ -1036,7 +1009,7 @@ String htmlPage() {
         });
     }
 
-    function uploadLocalAudio() {
+    function uploadBrowserAudio() {
       const file = audioFileInput.files[0];
       if (!file) {
         setAudioMessage('Choose a WAV file first.');
@@ -1059,7 +1032,7 @@ String htmlPage() {
         });
     }
 
-    function playLocalAudio() {
+    function playBrowserAudio() {
       fetch('/audio/play', { method: 'POST' })
         .then(handleAudioJsonResponse)
         .catch(() => {
@@ -1068,7 +1041,7 @@ String htmlPage() {
         });
     }
 
-    function stopLocalAudio() {
+    function stopBrowserAudio() {
       fetch('/audio/stop', { method: 'POST' })
         .then(handleAudioJsonResponse)
         .catch(() => {
@@ -1091,9 +1064,9 @@ String htmlPage() {
     wifiScanButton.addEventListener('click', scanWifiNetworks);
     wifiConnectButton.addEventListener('click', connectWifiNetwork);
     wifiDisconnectButton.addEventListener('click', disconnectWifiNetwork);
-    audioUploadButton.addEventListener('click', uploadLocalAudio);
-    audioPlayButton.addEventListener('click', playLocalAudio);
-    audioStopButton.addEventListener('click', stopLocalAudio);
+    audioUploadButton.addEventListener('click', uploadBrowserAudio);
+    audioPlayButton.addEventListener('click', playBrowserAudio);
+    audioStopButton.addEventListener('click', stopBrowserAudio);
     pollSteeringState();
     setInterval(pollSteeringState, 250);
   </script>
@@ -1140,13 +1113,8 @@ String htmlPage() {
   html.replace("WIFI_STA_IP", wifiStaIpValue);
   html.replace("WIFI_STA_SSID", wifiStaSsidValue);
   html.replace("WIFI_STA_SAVED", wifiStaSavedValue);
-  html.replace("BT_SPEAKER_STATUS", btSpeakerStatusValue);
-  html.replace("BT_SPEAKER_NAME", btSpeakerNameValue);
-  html.replace("BT_I2S_PINS", btSpeakerPinsValue);
-  html.replace("BT_CONNECTION_STATE", btConnectionStateValue);
-  html.replace("BT_AUDIO_STATE", btAudioStateValue);
-  html.replace("BT_AVRCP_CONNECTED", btAvrcConnectedValue);
-  html.replace("BT_SAMPLE_RATE", btSampleRateValue);
+  html.replace("AUDIO_OUTPUT_STATUS", audioOutputStatusValue);
+  html.replace("AUDIO_OUTPUT_PINS", audioOutputPinsValue);
   html.replace("AUDIO_STORAGE_STATUS", audioStorageStatusValue);
   html.replace("AUDIO_STORAGE_USED", audioStorageUsedValue);
   html.replace("AUDIO_STORAGE_FREE", audioStorageFreeValue);
@@ -1230,66 +1198,49 @@ String stateJson() {
   } else {
     json += "false";
   }
-  json += ",\"bt_speaker_started\":";
-  if (bluetoothSpeakerStarted()) {
+  json += ",\"audio_output_started\":";
+  if (speakerI2sStarted()) {
     json += "true";
   } else {
     json += "false";
   }
-  json += ",\"bt_speaker_name\":\"";
-  json += jsonEscape(bluetoothSpeakerName());
+  json += ",\"audio_output_status\":\"";
+  json += jsonEscape(speakerI2sStatusLabel());
   json += "\"";
-  json += ",\"bt_speaker_status\":\"";
-  json += jsonEscape(bluetoothSpeakerStatusLabel());
+  json += ",\"audio_output_pins\":\"";
+  json += jsonEscape(speakerI2sPinsLabel());
   json += "\"";
-  json += ",\"bt_i2s_pins\":\"";
-  json += jsonEscape(bluetoothSpeakerPinsLabel());
-  json += "\"";
-  json += ",\"bt_connection_state\":\"";
-  json += jsonEscape(bluetoothConnectionStateLabel());
-  json += "\"";
-  json += ",\"bt_audio_state\":\"";
-  json += jsonEscape(bluetoothAudioStateLabel());
-  json += "\"";
-  json += ",\"bt_avrc_connected\":";
-  if (bluetoothAvrcConnected()) {
-    json += "true";
-  } else {
-    json += "false";
-  }
-  json += ",\"bt_sample_rate\":";
-  json += String(bluetoothSampleRate());
   json += ",\"audio_storage_ready\":";
-  if (localAudioStorageReady()) {
+  if (browserAudioStorageReady()) {
     json += "true";
   } else {
     json += "false";
   }
   json += ",\"audio_storage_total\":";
-  json += String((unsigned long)localAudioStorageTotalBytes());
+  json += String((unsigned long)browserAudioStorageTotalBytes());
   json += ",\"audio_storage_used\":";
-  json += String((unsigned long)localAudioStorageUsedBytes());
+  json += String((unsigned long)browserAudioStorageUsedBytes());
   json += ",\"audio_storage_free\":";
-  json += String((unsigned long)localAudioStorageFreeBytes());
+  json += String((unsigned long)browserAudioStorageFreeBytes());
   json += ",\"audio_file_saved\":";
-  if (localAudioFileSaved()) {
+  if (browserAudioFileSaved()) {
     json += "true";
   } else {
     json += "false";
   }
   json += ",\"audio_file_size\":";
-  json += String((unsigned long)localAudioFileSize());
+  json += String((unsigned long)browserAudioFileSize());
   json += ",\"audio_file_info\":\"";
-  json += jsonEscape(localAudioFileInfoLabel());
+  json += jsonEscape(browserAudioFileInfoLabel());
   json += "\"";
   json += ",\"audio_playing\":";
-  if (localAudioIsPlaying()) {
+  if (browserAudioIsPlaying()) {
     json += "true";
   } else {
     json += "false";
   }
   json += ",\"audio_status\":\"";
-  json += jsonEscape(localAudioStatusLabel());
+  json += jsonEscape(browserAudioStatusLabel());
   json += "\"";
   json += "}";
   return json;
@@ -1300,11 +1251,6 @@ void handleState() {
 }
 
 void handleWifiScan() {
-  if (wifiStationDisabledForBluetooth()) {
-    server.send(409, "application/json", "{\"error\":\"station_wifi_disabled_for_bluetooth\",\"message\":\"Station WiFi scan is disabled while Bluetooth audio is active.\"}");
-    return;
-  }
-
   int networkCount = WiFi.scanNetworks(false, true);
   String json = "{\"networks\":[";
 
@@ -1332,11 +1278,6 @@ void handleWifiScan() {
 }
 
 void handleWifiConnect() {
-  if (wifiStationDisabledForBluetooth()) {
-    server.send(409, "application/json", "{\"error\":\"station_wifi_disabled_for_bluetooth\",\"message\":\"Station WiFi connect is disabled while Bluetooth audio is active.\"}");
-    return;
-  }
-
   if (!server.hasArg("ssid")) {
     server.send(400, "application/json", "{\"error\":\"ssid required\"}");
     return;
@@ -1364,11 +1305,7 @@ void handleWifiConnect() {
 
 void handleWifiDisconnect() {
   WiFi.disconnect(false, false);
-  if (wifiStationDisabledForBluetooth()) {
-    WiFi.mode(WIFI_AP);
-  } else {
-    WiFi.mode(WIFI_AP_STA);
-  }
+  WiFi.mode(WIFI_AP_STA);
   clearWifiStationCredentials();
   server.send(200, "application/json", "{\"status\":\"disconnected\"}");
 }
