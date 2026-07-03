@@ -54,12 +54,17 @@ static const bool SWAP_IMU_XY_AXES = true;
 // ----------------------
 // Gauge state
 // ----------------------
-float dashboardRpmK = 2.6f;
+float dashboardRpmK = 0.0f;
 float dashboardMph = 0.0f;
 float dashboardFuelLevel = 0.16f;
 bool dashboardHeadlightsOn = false;
-int dashboardGearIndex = 3;
+int dashboardGearIndex = 0;
 String dashboardOdometer = "000000";
+
+static const int GEAR_PARK_INDEX = 0;
+static const int GEAR_REVERSE_INDEX = 1;
+static const int GEAR_NEUTRAL_INDEX = 2;
+static const int GEAR_DRIVE_INDEX = 3;
 
 struct RcPulseInput {
   int pin;
@@ -99,6 +104,32 @@ RcPulseInput headlightInput = {
   0,
   0
 };
+
+// ----------------------
+// Sound trigger input state
+// ----------------------
+static const int SOUND_SWITCH_INPUT_PIN = 39;
+static const unsigned long SOUND_SWITCH_INPUT_STALE_US = HEADLIGHT_INPUT_STALE_US;
+static const unsigned long SOUND_SWITCH_PULSE_MIN_VALID_US = HEADLIGHT_PULSE_MIN_VALID_US;
+static const unsigned long SOUND_SWITCH_PULSE_ON_THRESHOLD_US = HEADLIGHT_PULSE_ON_THRESHOLD_US;
+static const unsigned long SOUND_SWITCH_PULSE_MAX_VALID_US = HEADLIGHT_PULSE_MAX_VALID_US;
+
+RcPulseInput soundSwitchInput = {
+  SOUND_SWITCH_INPUT_PIN,
+  SOUND_SWITCH_INPUT_STALE_US,
+  SOUND_SWITCH_PULSE_MIN_VALID_US,
+  SOUND_SWITCH_PULSE_MAX_VALID_US,
+  false,
+  false,
+  0,
+  0,
+  false,
+  0,
+  0,
+  0
+};
+bool soundSwitchOn = false;
+bool soundSwitchWasOn = false;
 
 unsigned long lastBlinkToggle = 0;
 bool warningOn = true;
@@ -148,6 +179,36 @@ RcPulseInput turnSignalInput = {
   0,
   0
 };
+
+// ----------------------
+// Throttle input state
+// ----------------------
+static const int THROTTLE_INPUT_PIN = 33;
+static const unsigned long THROTTLE_PULSE_STALE_US = 250000UL;
+static const unsigned long THROTTLE_PULSE_MIN_VALID_US = 900UL;
+static const unsigned long THROTTLE_PULSE_MAX_VALID_US = 2100UL;
+static const unsigned long THROTTLE_OFF_US = 1534UL;
+static const unsigned long THROTTLE_FULL_FORWARD_US = 979UL;
+static const unsigned long THROTTLE_FULL_REVERSE_US = 2045UL;
+static const unsigned long THROTTLE_NEUTRAL_TOLERANCE_US = 25UL;
+static const unsigned long THROTTLE_PARK_DELAY_MS = 10000UL;
+static const float THROTTLE_RPM_MAX_K = 8.0f;
+
+RcPulseInput throttleInput = {
+  THROTTLE_INPUT_PIN,
+  THROTTLE_PULSE_STALE_US,
+  THROTTLE_PULSE_MIN_VALID_US,
+  THROTTLE_PULSE_MAX_VALID_US,
+  false,
+  false,
+  0,
+  0,
+  false,
+  0,
+  0,
+  0
+};
+unsigned long throttleIdleStartedMs = 0;
 
 // ----------------------
 // Environment sensor data
@@ -222,6 +283,7 @@ String speakerI2sStatusLabel();
 String speakerI2sPinsLabel();
 
 bool browserAudioIsPlaying();
+void setBrowserAudioLoopRequested(bool enabled);
 void initBrowserAudioStorage();
 void updateBrowserAudioPlayback();
 bool browserAudioStorageReady();
@@ -232,6 +294,8 @@ bool browserAudioFileSaved();
 size_t browserAudioFileSize();
 String browserAudioFileInfoLabel();
 String browserAudioStatusLabel();
+bool startBrowserAudioPlayback(String &message);
+void stopBrowserAudioPlayback(const String &status);
 void handleBrowserAudioUpload();
 void handleBrowserAudioUploadComplete();
 void handleBrowserAudioPlay();
@@ -263,6 +327,12 @@ void handleHeadlightInputChange();
 void updateHeadlightInput();
 String headlightInputStatusLabel();
 String headlightInputRawLabel();
+void handleSoundSwitchInputChange();
+void updateSoundSwitchInput(bool allowPlayback);
+String soundSwitchInputStatusLabel();
+void handleThrottleInputChange();
+void updateThrottleInput();
+String throttleInputStatusLabel();
 void handleTurnSignalInputChange();
 void updateTurnSignalPulseInput();
 String turnSignalInputPulseStatusLabel();
@@ -650,12 +720,88 @@ void updateHeadlightInput() {
   }
 }
 
+void IRAM_ATTR handleSoundSwitchInputChange() {
+  handleRcPulseInputChange(soundSwitchInput);
+}
+
+void updateSoundSwitchInput(bool allowPlayback) {
+  updateRcPulseInput(soundSwitchInput);
+  soundSwitchOn =
+    soundSwitchInput.pulseFresh &&
+    soundSwitchInput.pulseWidthUs > SOUND_SWITCH_PULSE_ON_THRESHOLD_US;
+
+  if (allowPlayback) {
+    if (soundSwitchOn) {
+      setBrowserAudioLoopRequested(true);
+      if (!browserAudioIsPlaying() && !soundSwitchWasOn) {
+        String playbackMessage;
+        startBrowserAudioPlayback(playbackMessage);
+      }
+    } else if (soundSwitchWasOn) {
+      setBrowserAudioLoopRequested(false);
+      stopBrowserAudioPlayback("Stopped");
+    }
+  }
+
+  soundSwitchWasOn = soundSwitchOn;
+}
+
 void IRAM_ATTR handleTurnSignalInputChange() {
   handleRcPulseInputChange(turnSignalInput);
 }
 
 void updateTurnSignalPulseInput() {
   updateRcPulseInput(turnSignalInput);
+}
+
+void IRAM_ATTR handleThrottleInputChange() {
+  handleRcPulseInputChange(throttleInput);
+}
+
+void updateThrottleInput() {
+  updateRcPulseInput(throttleInput);
+
+  unsigned long now = millis();
+  if (!throttleInput.pulseFresh) {
+    dashboardRpmK = 0.0f;
+    if (throttleIdleStartedMs == 0) {
+      throttleIdleStartedMs = now;
+    }
+    dashboardGearIndex = (now - throttleIdleStartedMs) >= THROTTLE_PARK_DELAY_MS ?
+      GEAR_PARK_INDEX :
+      GEAR_NEUTRAL_INDEX;
+    return;
+  }
+
+  unsigned long pulseWidthUs = throttleInput.pulseWidthUs;
+  bool forwardActive = pulseWidthUs + THROTTLE_NEUTRAL_TOLERANCE_US < THROTTLE_OFF_US;
+  bool reverseActive = pulseWidthUs > THROTTLE_OFF_US + THROTTLE_NEUTRAL_TOLERANCE_US;
+
+  if (forwardActive) {
+    float forwardProgress = (float)(THROTTLE_OFF_US - pulseWidthUs) /
+      (float)(THROTTLE_OFF_US - THROTTLE_FULL_FORWARD_US);
+    dashboardRpmK = clamp01(forwardProgress) * THROTTLE_RPM_MAX_K;
+    dashboardGearIndex = GEAR_DRIVE_INDEX;
+    throttleIdleStartedMs = 0;
+    return;
+  }
+
+  if (reverseActive) {
+    float reverseProgress = (float)(pulseWidthUs - THROTTLE_OFF_US) /
+      (float)(THROTTLE_FULL_REVERSE_US - THROTTLE_OFF_US);
+    dashboardRpmK = clamp01(reverseProgress) * THROTTLE_RPM_MAX_K;
+    dashboardGearIndex = GEAR_REVERSE_INDEX;
+    throttleIdleStartedMs = 0;
+    return;
+  }
+
+  dashboardRpmK = 0.0f;
+  if (throttleIdleStartedMs == 0) {
+    throttleIdleStartedMs = now;
+  }
+  dashboardGearIndex = (now - throttleIdleStartedMs) >= THROTTLE_PARK_DELAY_MS ?
+    GEAR_PARK_INDEX :
+    GEAR_NEUTRAL_INDEX;
 }
 
 unsigned long readSteeringPulseAverageUs(int sampleCount) {
@@ -862,8 +1008,22 @@ String headlightInputRawLabel() {
   return headlightInput.rawHigh ? "HIGH" : "LOW";
 }
 
+String soundSwitchInputStatusLabel() {
+  if (soundSwitchInput.pulseFresh) {
+    return soundSwitchOn ? "On pulse" : "Off pulse";
+  }
+  return "No pulse";
+}
+
 String turnSignalInputPulseStatusLabel() {
   if (turnSignalInput.pulseFresh) {
+    return "Receiving";
+  }
+  return "No pulse";
+}
+
+String throttleInputStatusLabel() {
+  if (throttleInput.pulseFresh) {
     return "Receiving";
   }
   return "No pulse";
@@ -924,6 +1084,12 @@ void setup() {
   initRcPulseInput(headlightInput);
   attachInterrupt(digitalPinToInterrupt(HEADLIGHT_INPUT_PIN), handleHeadlightInputChange, CHANGE);
   updateHeadlightInput();
+  initRcPulseInput(soundSwitchInput);
+  attachInterrupt(digitalPinToInterrupt(SOUND_SWITCH_INPUT_PIN), handleSoundSwitchInputChange, CHANGE);
+  updateSoundSwitchInput(false);
+  initRcPulseInput(throttleInput);
+  attachInterrupt(digitalPinToInterrupt(THROTTLE_INPUT_PIN), handleThrottleInputChange, CHANGE);
+  updateThrottleInput();
   pinMode(LEFT_TURN_LED_PIN, OUTPUT);
   pinMode(RIGHT_TURN_LED_PIN, OUTPUT);
   writeTurnSignalLed(LEFT_TURN_LED_PIN, false);
@@ -987,7 +1153,9 @@ void setup() {
 
 void loop() {
   updateHeadlightInput();
+  updateSoundSwitchInput(true);
   updateTurnSignalPulseInput();
+  updateThrottleInput();
   updateSteeringInput();
   updateTurnSignalOutputs();
   server.handleClient();

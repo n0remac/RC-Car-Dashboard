@@ -181,8 +181,9 @@ void drawTemperatureGauge(
   float temperatureC,
   bool sensorAvailable
 ) {
-  float progressDown = sensorAvailable ? (1.0f - normalizeGaugeValue(temperatureC, 0.0f, 50.0f)) : 0.5f;
-  drawDownwardArcGauge(s, pivotX, pivotY, radius, progressDown, nullptr, nullptr);
+  float temperatureF = (temperatureC * 1.8f) + 32.0f;
+  float progressDown = sensorAvailable ? (1.0f - normalizeGaugeValue(temperatureF, 32.0f, 100.0f)) : 0.5f;
+  drawDownwardArcGauge(s, pivotX, pivotY, radius, progressDown, "H", "C");
 }
 
 void drawTurnSignal(TFT_eSprite &s, int x, int y, bool left, bool active) {
@@ -317,9 +318,9 @@ void drawTiltWidget(
   s.fillCircle(bubbleX, bubbleY, 2, TFT_RED);
 
   if (frontView) {
-    drawTruckFrontIcon(s, pivotX - 10, pivotY - radius - 4);
+    drawTruckFrontIcon(s, pivotX - 10, pivotY + 3 - radius - 4);
   } else {
-    drawTruckSideIcon(s, pivotX - 10, pivotY - radius - 4);
+    drawTruckSideIcon(s, pivotX - 10, pivotY + 3 - radius - 4);
   }
 }
 
@@ -337,8 +338,8 @@ void renderGaugeScreen(TFT_eSprite &s) {
   drawTurnSignal(s, 132 + offsetX, 62 + offsetY, false, rightTurnSignalFlashing());
   drawGearColumn(s, 118 + offsetX, 74 + offsetY, dashboardGearIndex);
 
-  drawTiltWidget(s, 151 + offsetX, 20 + offsetY, 17, false, pitchDeg);
-  drawTiltWidget(s, 184 + offsetX, 20 + offsetY, 17, true, rollDeg);
+  drawTiltWidget(s, 146 + offsetX, 40 + offsetY, 17, false, pitchDeg);
+  drawTiltWidget(s, 179 + offsetX, 40 + offsetY, 17, true, rollDeg);
 
   drawTallCircularGauge(
     s,
@@ -361,7 +362,7 @@ void renderGaugeScreen(TFT_eSprite &s) {
     "MPH"
   );
 
-  drawTemperatureGauge(s, 220 + offsetX, 40 + offsetY, 17, environmentTempC, bmeAvailable);
+  drawTemperatureGauge(s, 217 + offsetX, 40 + offsetY, 17, environmentTempC, bmeAvailable);
   // drawOdometer(s, 25 + offsetX, 118 + offsetY, dashboardOdometer);
   drawLowFuelIndicator(s, 195 + offsetX, 115 + offsetY, lowFuelActive);
 }

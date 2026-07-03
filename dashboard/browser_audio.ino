@@ -30,6 +30,7 @@ BrowserAudioWavInfo validateBrowserAudioWavFile(const char *path);
 void refreshBrowserAudioFileState();
 void stopBrowserAudioPlayback(const String &status);
 bool startBrowserAudioPlayback(String &message);
+void setBrowserAudioLoopRequested(bool enabled);
 bool replaceBrowserAudioFile(String &error);
 void failBrowserAudioUpload(const String &message);
 String browserAudioResponseJson(bool ok, const String &message);
@@ -49,6 +50,7 @@ String browserAudioStatus = "Not ready";
 BrowserAudioWavInfo browserAudioSavedInfo;
 size_t browserAudioSavedSize = 0;
 bool browserAudioPlaying = false;
+bool browserAudioLoopRequested = false;
 
 File browserAudioPlaybackFile;
 WAVDecoder browserAudioWavDecoder;
@@ -342,6 +344,10 @@ bool browserAudioIsPlaying() {
   return browserAudioPlaying;
 }
 
+void setBrowserAudioLoopRequested(bool enabled) {
+  browserAudioLoopRequested = enabled;
+}
+
 void stopBrowserAudioPlayback(const String &status) {
   if (browserAudioPlaying) {
     browserAudioCopier.end();
@@ -433,7 +439,12 @@ void updateBrowserAudioPlayback() {
 
     if (copied == 0) {
       if (!browserAudioPlaybackFile.available()) {
-        stopBrowserAudioPlayback("Finished");
+        if (browserAudioLoopRequested) {
+          String loopMessage;
+          startBrowserAudioPlayback(loopMessage);
+        } else {
+          stopBrowserAudioPlayback("Finished");
+        }
       }
       break;
     }
@@ -536,6 +547,7 @@ void handleBrowserAudioUpload() {
     if (browserAudioPlaying) {
       stopBrowserAudioPlayback("Stopped");
     }
+    browserAudioLoopRequested = false;
 
     browserAudioUploadBytes = 0;
     browserAudioUploadLimit = 0;
@@ -647,6 +659,7 @@ void handleBrowserAudioPlay() {
 }
 
 void handleBrowserAudioStop() {
+  browserAudioLoopRequested = false;
   stopBrowserAudioPlayback("Stopped");
   sendBrowserAudioResponse(200, true, "Stopped");
 }

@@ -39,7 +39,8 @@ String htmlPage() {
   String axisLabels = onOffLabel(showTiltAxisLabels);
   String tolerance = String(tiltBubbleToleranceDeg, 1) + " deg";
   String axisLabelButton = showTiltAxisLabels ? "Hide Axis Labels" : "Show Axis Labels";
-  String temperatureValue = bmeAvailable ? String(environmentTempC, 1) + " C" : String("Unavailable");
+  float environmentTempF = (environmentTempC * 1.8f) + 32.0f;
+  String temperatureValue = bmeAvailable ? String(environmentTempF, 1) + " F" : String("Unavailable");
   String pitchValue = imuAvailable ? String(pitchDeg, 1) + " deg" : String("Unavailable");
   String rollValue = imuAvailable ? String(rollDeg, 1) + " deg" : String("Unavailable");
   String gpsLock = gpsLockLabel();
@@ -71,6 +72,20 @@ String htmlPage() {
     String("--");
   String headlightPulseAgeValue = headlightInput.pulseWidthUs > 0 ?
     String(headlightInput.pulseAgeMs) :
+    String("--");
+  String soundSwitchStatusValue = soundSwitchInputStatusLabel();
+  String soundSwitchPulseValue = soundSwitchInput.pulseWidthUs > 0 ?
+    String(soundSwitchInput.pulseWidthUs) :
+    String("--");
+  String soundSwitchPulseAgeValue = soundSwitchInput.pulseWidthUs > 0 ?
+    String(soundSwitchInput.pulseAgeMs) :
+    String("--");
+  String throttleStatusValue = throttleInputStatusLabel();
+  String throttlePulseValue = throttleInput.pulseWidthUs > 0 ?
+    String(throttleInput.pulseWidthUs) :
+    String("--");
+  String throttlePulseAgeValue = throttleInput.pulseWidthUs > 0 ?
+    String(throttleInput.pulseAgeMs) :
     String("--");
   String steeringCenterValue = String(steeringCenterUs);
   String steeringLeftValue = String(steeringLeftUs);
@@ -613,6 +628,30 @@ String htmlPage() {
           <span id="headlightPulseAgeValue">HEADLIGHT_PULSE_AGE</span>
         </div>
         <div class="diagnostic">
+          <span class="label">Sound Switch</span>
+          <span id="soundSwitchStatusValue">SOUND_SWITCH_STATUS</span>
+        </div>
+        <div class="diagnostic">
+          <span class="label">GPIO39 Pulse</span>
+          <span id="soundSwitchPulseValue">SOUND_SWITCH_PULSE</span>
+        </div>
+        <div class="diagnostic">
+          <span class="label">GPIO39 Pulse Age</span>
+          <span id="soundSwitchPulseAgeValue">SOUND_SWITCH_PULSE_AGE</span>
+        </div>
+        <div class="diagnostic">
+          <span class="label">Throttle Status</span>
+          <span id="throttleStatusValue">THROTTLE_STATUS</span>
+        </div>
+        <div class="diagnostic">
+          <span class="label">GPIO33 Pulse</span>
+          <span id="throttlePulseValue">THROTTLE_PULSE</span>
+        </div>
+        <div class="diagnostic">
+          <span class="label">GPIO33 Pulse Age</span>
+          <span id="throttlePulseAgeValue">THROTTLE_PULSE_AGE</span>
+        </div>
+        <div class="diagnostic">
           <span class="label">Calibration</span>
           <span id="calibrationStatusValue">CALIBRATION_STATUS</span>
         </div>
@@ -769,6 +808,12 @@ String htmlPage() {
     const headlightStateValue = document.getElementById('headlightStateValue');
     const headlightPulseValue = document.getElementById('headlightPulseValue');
     const headlightPulseAgeValue = document.getElementById('headlightPulseAgeValue');
+    const soundSwitchStatusValue = document.getElementById('soundSwitchStatusValue');
+    const soundSwitchPulseValue = document.getElementById('soundSwitchPulseValue');
+    const soundSwitchPulseAgeValue = document.getElementById('soundSwitchPulseAgeValue');
+    const throttleStatusValue = document.getElementById('throttleStatusValue');
+    const throttlePulseValue = document.getElementById('throttlePulseValue');
+    const throttlePulseAgeValue = document.getElementById('throttlePulseAgeValue');
     const calibrationStatusValue = document.getElementById('calibrationStatusValue');
     const centerUsValue = document.getElementById('centerUsValue');
     const leftRightUsValue = document.getElementById('leftRightUsValue');
@@ -905,6 +950,12 @@ String htmlPage() {
       headlightStateValue.textContent = state.headlight_status;
       headlightPulseValue.textContent = state.headlight_pulse_us > 0 ? state.headlight_pulse_us + ' us' : '--';
       headlightPulseAgeValue.textContent = state.headlight_pulse_us > 0 ? state.headlight_pulse_age_ms + ' ms' : '--';
+      soundSwitchStatusValue.textContent = state.sound_switch_status;
+      soundSwitchPulseValue.textContent = state.sound_switch_pulse_us > 0 ? state.sound_switch_pulse_us + ' us' : '--';
+      soundSwitchPulseAgeValue.textContent = state.sound_switch_pulse_us > 0 ? state.sound_switch_pulse_age_ms + ' ms' : '--';
+      throttleStatusValue.textContent = state.throttle_status;
+      throttlePulseValue.textContent = state.throttle_pulse_us > 0 ? state.throttle_pulse_us + ' us' : '--';
+      throttlePulseAgeValue.textContent = state.throttle_pulse_us > 0 ? state.throttle_pulse_age_ms + ' ms' : '--';
       calibrationStatusValue.textContent = state.calibration_status;
       brightnessSlider.value = state.brightness;
       brightnessValue.textContent = state.brightness;
@@ -1149,6 +1200,12 @@ String htmlPage() {
   html.replace("HEADLIGHT_STATE", headlightStateValue);
   html.replace("HEADLIGHT_PULSE_AGE", headlightPulseAgeValue == "--" ? headlightPulseAgeValue : headlightPulseAgeValue + " ms");
   html.replace("HEADLIGHT_PULSE", headlightPulseValue == "--" ? headlightPulseValue : headlightPulseValue + " us");
+  html.replace("SOUND_SWITCH_STATUS", soundSwitchStatusValue);
+  html.replace("SOUND_SWITCH_PULSE_AGE", soundSwitchPulseAgeValue == "--" ? soundSwitchPulseAgeValue : soundSwitchPulseAgeValue + " ms");
+  html.replace("SOUND_SWITCH_PULSE", soundSwitchPulseValue == "--" ? soundSwitchPulseValue : soundSwitchPulseValue + " us");
+  html.replace("THROTTLE_STATUS", throttleStatusValue);
+  html.replace("THROTTLE_PULSE_AGE", throttlePulseAgeValue == "--" ? throttlePulseAgeValue : throttlePulseAgeValue + " ms");
+  html.replace("THROTTLE_PULSE", throttlePulseValue == "--" ? throttlePulseValue : throttlePulseValue + " us");
   return html;
 }
 
@@ -1222,6 +1279,38 @@ String stateJson() {
   json += String(headlightInput.pulseWidthUs);
   json += ",\"headlight_pulse_age_ms\":";
   json += String(headlightInput.pulseAgeMs);
+  json += ",\"sound_switch_status\":\"";
+  json += jsonEscape(soundSwitchInputStatusLabel());
+  json += "\"";
+  json += ",\"sound_switch_on\":";
+  if (soundSwitchOn) {
+    json += "true";
+  } else {
+    json += "false";
+  }
+  json += ",\"sound_switch_pulse_fresh\":";
+  if (soundSwitchInput.pulseFresh) {
+    json += "true";
+  } else {
+    json += "false";
+  }
+  json += ",\"sound_switch_pulse_us\":";
+  json += String(soundSwitchInput.pulseWidthUs);
+  json += ",\"sound_switch_pulse_age_ms\":";
+  json += String(soundSwitchInput.pulseAgeMs);
+  json += ",\"throttle_status\":\"";
+  json += jsonEscape(throttleInputStatusLabel());
+  json += "\"";
+  json += ",\"throttle_pulse_fresh\":";
+  if (throttleInput.pulseFresh) {
+    json += "true";
+  } else {
+    json += "false";
+  }
+  json += ",\"throttle_pulse_us\":";
+  json += String(throttleInput.pulseWidthUs);
+  json += ",\"throttle_pulse_age_ms\":";
+  json += String(throttleInput.pulseAgeMs);
   json += ",\"brightness\":";
   json += String(screenBrightnessPercent);
   json += ",\"wifi_sta_status\":\"";
