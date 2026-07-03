@@ -283,29 +283,43 @@ void drawTruckFrontIcon(TFT_eSprite &s, int x, int y) {
 
 void drawTiltWidget(
   TFT_eSprite &s,
-  int x,
-  int y,
-  int w,
+  int pivotX,
+  int pivotY,
+  int radius,
   bool frontView,
   float tiltValue
 ) {
+  uint16_t detail = rgb565(64, 64, 64);
   float clamped = clamp01((tiltValue + 15.0f) / 30.0f);
-  float bubbleDeg = 180.0f - (clamped * 180.0f);
-  int bubbleRadius = 10;
-  int bubbleCx = x + (w / 2);
-  int bubbleCy = y + 10;
+  float bubbleDeg = 150.0f - (clamped * 120.0f);
+  float startDeg = 150.0f;
+  float endDeg = 30.0f;
 
-  drawArcLine(s, bubbleCx, bubbleCy, bubbleRadius, 180.0f, 0.0f, TFT_WHITE);
-  drawArcLine(s, bubbleCx, bubbleCy, bubbleRadius - 1, 180.0f, 0.0f, TFT_WHITE);
+  drawArcLine(s, pivotX, pivotY, radius, startDeg, endDeg, TFT_WHITE);
+  drawArcLine(s, pivotX, pivotY, radius - 1, startDeg, endDeg, TFT_WHITE);
+  drawArcLine(s, pivotX, pivotY, radius - 4, startDeg, endDeg, detail);
 
-  int bubbleX = polarX(bubbleCx, bubbleRadius - 3, bubbleDeg);
-  int bubbleY = polarY(bubbleCy, bubbleRadius - 3, bubbleDeg);
-  s.fillCircle(bubbleX, bubbleY, 3, TFT_WHITE);
+  for (int i = 0; i <= 4; i++) {
+    float p = (float)i / 4.0f;
+    float deg = startDeg + ((endDeg - startDeg) * p);
+    int tickInner = (i == 0 || i == 4) ? radius - 8 : radius - 4;
+    s.drawLine(
+      polarX(pivotX, tickInner, deg),
+      polarY(pivotY, tickInner, deg),
+      polarX(pivotX, radius, deg),
+      polarY(pivotY, radius, deg),
+      TFT_WHITE
+    );
+  }
+
+  int bubbleX = polarX(pivotX, radius - 5, bubbleDeg);
+  int bubbleY = polarY(pivotY, radius - 5, bubbleDeg);
+  s.fillCircle(bubbleX, bubbleY, 2, TFT_RED);
 
   if (frontView) {
-    drawTruckFrontIcon(s, x + 4, y - 5);
+    drawTruckFrontIcon(s, pivotX - 10, pivotY - radius - 4);
   } else {
-    drawTruckSideIcon(s, x + 2, y - 5);
+    drawTruckSideIcon(s, pivotX - 10, pivotY - radius - 4);
   }
 }
 
@@ -323,8 +337,8 @@ void renderGaugeScreen(TFT_eSprite &s) {
   drawTurnSignal(s, 132 + offsetX, 62 + offsetY, false, rightTurnSignalFlashing());
   drawGearColumn(s, 118 + offsetX, 74 + offsetY, dashboardGearIndex);
 
-  drawTiltWidget(s, 145 + offsetX, 4 + offsetY, 24, false, pitchDeg);
-  drawTiltWidget(s, 177 + offsetX, 4 + offsetY, 24, true, rollDeg);
+  drawTiltWidget(s, 151 + offsetX, 20 + offsetY, 17, false, pitchDeg);
+  drawTiltWidget(s, 184 + offsetX, 20 + offsetY, 17, true, rollDeg);
 
   drawTallCircularGauge(
     s,

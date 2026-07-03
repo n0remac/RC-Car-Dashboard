@@ -49,6 +49,7 @@ static const int SCL_PIN = 22;
 static const uint8_t BME_ADDRESS_PRIMARY = 0x76;
 static const uint8_t BME_ADDRESS_SECONDARY = 0x77;
 static const float BME_SEA_LEVEL_HPA = 1013.25f;
+static const bool SWAP_IMU_XY_AXES = true;
 
 // ----------------------
 // Gauge state
@@ -187,6 +188,7 @@ bool showTiltAxisLabels = false;
 float tiltBubbleToleranceDeg = 1.0f;
 float longitudinalAxisAccelG = 0.0f;
 unsigned long lastLongitudinalAccelSampleMs = 0;
+bool tiltReferenceCalibrated = false;
 
 unsigned long lastTiltRender = 0;
 const unsigned long TILT_RENDER_INTERVAL_MS = 50;
@@ -291,6 +293,17 @@ float degToRad(float deg) {
   return deg * 0.0174532925f;
 }
 
+float angleDeltaDeg(float valueDeg, float referenceDeg) {
+  float deltaDeg = valueDeg - referenceDeg;
+  while (deltaDeg > 180.0f) {
+    deltaDeg -= 360.0f;
+  }
+  while (deltaDeg < -180.0f) {
+    deltaDeg += 360.0f;
+  }
+  return deltaDeg;
+}
+
 int polarX(int cx, int radius, float deg) {
   return cx + (int)(cos(degToRad(deg)) * radius);
 }
@@ -321,6 +334,16 @@ int clampInt(int value, int minValue, int maxValue) {
 
 uint16_t rgb565(uint8_t r, uint8_t g, uint8_t b) {
   return ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
+}
+
+void swapImuHorizontalAxes(float &xValue, float &yValue) {
+  if (!SWAP_IMU_XY_AXES) {
+    return;
+  }
+
+  float swapped = xValue;
+  xValue = yValue;
+  yValue = swapped;
 }
 
 float readLongitudinalAxisAccelG() {
@@ -389,11 +412,13 @@ void updateIMU() {
 
   if (IMU.accelerationAvailable()) {
     IMU.readAcceleration(ax, ay, az);
+    swapImuHorizontalAxes(ax, ay);
     accelerationUpdated = true;
   }
 
   if (IMU.gyroscopeAvailable()) {
     IMU.readGyroscope(gx, gy, gz);
+    swapImuHorizontalAxes(gx, gy);
   }
 
   rawRollDeg = atan2(ay, az) * 180.0f / PI;
@@ -401,6 +426,11 @@ void updateIMU() {
   applyTiltOrientation();
 
   if (accelerationUpdated) {
+    if (!tiltReferenceCalibrated) {
+      resetTiltReference();
+      tiltReferenceCalibrated = true;
+    }
+
     longitudinalAxisAccelG = readLongitudinalAxisAccelG();
     lastLongitudinalAccelSampleMs = millis();
   }
@@ -421,8 +451,8 @@ void applyTiltOrientation() {
     orientedRollDeg = rawPitchDeg;
   }
 
-  pitchDeg = orientedPitchDeg - pitchZeroDeg;
-  rollDeg = orientedRollDeg - rollZeroDeg;
+  pitchDeg = angleDeltaDeg(orientedPitchDeg, pitchZeroDeg);
+  rollDeg = angleDeltaDeg(orientedRollDeg, rollZeroDeg);
 
   if (invertPitchAxis) {
     pitchDeg = -pitchDeg;
