@@ -89,44 +89,37 @@ const unsigned long BLINK_INTERVAL_MS = 500;
 static const int STEERING_MIN_DEG = -45;
 static const int STEERING_MAX_DEG = 45;
 static const int STEERING_INPUT_PIN = 32;
-static const int STEERING_DEFAULT_RIGHT_OFFSET_MV = 100;
-static const int STEERING_DEFAULT_LEFT_OFFSET_MV = 70;
-static const int STEERING_VALID_MIN_MV = 0;
-static const int STEERING_VALID_MAX_MV = 1000;
-static const int STEERING_SAMPLE_COUNT = 8;
-static const int STEERING_CALIBRATION_SAMPLE_COUNT = 40;
-static const int STEERING_CALIBRATION_SAMPLE_DELAY_MS = 3;
+static const unsigned long STEERING_DEFAULT_RIGHT_US = 1025UL;
+static const unsigned long STEERING_DEFAULT_CENTER_US = 1500UL;
+static const unsigned long STEERING_DEFAULT_LEFT_US = 2000UL;
+static const int STEERING_CALIBRATION_SAMPLE_COUNT = 5;
 static const float STEERING_SMOOTHING_ALPHA = 0.25f;
+static const unsigned long STEERING_PULSE_CAPTURE_WINDOW_US = 25000UL;
+static const unsigned long STEERING_PULSE_MIN_VALID_US = 900UL;
+static const unsigned long STEERING_PULSE_MAX_VALID_US = 2100UL;
+static const int STEERING_PULSE_THRESHOLD_MV = 200;
+static const float STEERING_PULSE_FILTER_ALPHA = 0.20f;
+static const unsigned long STEERING_PULSE_DEADBAND_US = 8UL;
 static const int TURN_SIGNAL_RELEASE_MARGIN_DEG = 3;
 static const int TURN_THRESHOLD_MIN_DEG = 0;
 static const int TURN_THRESHOLD_MAX_DEG = 45;
 static const int LEFT_TURN_LED_PIN = 26;
 static const int RIGHT_TURN_LED_PIN = 25;
 static const bool TURN_LED_ACTIVE_LOW = true;
-static const unsigned long TURN_SIGNAL_INPUT_STALE_US = 250000UL;
 
 int steeringWheelAngleDeg = 0;
 float smoothedSteeringAngleDeg = 0.0f;
-int steeringInputRaw = 0;
-int steeringInputMv = 0;
-int steeringInputMinMv = 9999;
-int steeringInputMaxMv = 0;
 bool steeringInputValid = false;
 bool leftTurnSignalActive = false;
 bool rightTurnSignalActive = false;
-int steeringCenterMv = 0;
-int steeringLeftMv = 0;
-int steeringRightMv = 0;
+unsigned long steeringCenterUs = STEERING_DEFAULT_CENTER_US;
+unsigned long steeringLeftUs = STEERING_DEFAULT_LEFT_US;
+unsigned long steeringRightUs = STEERING_DEFAULT_RIGHT_US;
 int turnSignalThresholdDeg = 15;
-bool turnSignalInputRawHigh = false;
 bool turnSignalInputPulseFresh = false;
 unsigned long turnSignalInputPulseWidthUs = 0;
-unsigned long turnSignalInputPulseAgeMs = 0;
-
-volatile bool turnSignalIsrRawHigh = false;
-volatile unsigned long turnSignalIsrPulseStartUs = 0;
-volatile unsigned long turnSignalIsrLastPulseWidthUs = 0;
-volatile unsigned long turnSignalIsrLastPulseAtUs = 0;
+float smoothedTurnSignalPulseUs = 0.0f;
+bool turnSignalPulseSmoothingReady = false;
 
 // ----------------------
 // Environment sensor data
@@ -233,18 +226,18 @@ String wifiStationStatusLabel();
 String wifiStationIpLabel();
 void applyTiltOrientation();
 void resetTiltReference();
-int readSteeringAverageMv(int sampleCount, int sampleDelayMs);
+unsigned long readSteeringPulseAverageUs(int sampleCount);
 void handleHeadlightInputChange();
 void updateHeadlightInput();
 String headlightInputStatusLabel();
 String headlightInputRawLabel();
-void handleTurnSignalInputChange();
 void updateTurnSignalPulseInput();
-String turnSignalInputRawLabel();
 String turnSignalInputPulseStatusLabel();
 void loadSteeringCalibration();
 void saveSteeringCalibration();
 bool steeringCalibrationValid();
+bool captureSteeringPulseByAdc(unsigned long &pulseWidthUs, int &pulsePeakMv);
+float mapSteeringPulseToAngle(unsigned long pulseWidthUs);
 void updateSteeringInput();
 void updateTurnSignalIntent();
 void updateTurnSignalOutputs();
@@ -585,78 +578,118 @@ void updateHeadlightInput() {
   }
 }
 
-void IRAM_ATTR handleTurnSignalInputChange() {
-  bool rawHigh = digitalRead(STEERING_INPUT_PIN) == HIGH;
-  unsigned long nowUs = micros();
-
-  turnSignalIsrRawHigh = rawHigh;
-  if (rawHigh) {
-    turnSignalIsrPulseStartUs = nowUs;
-  } else if (turnSignalIsrPulseStartUs != 0) {
-    turnSignalIsrLastPulseWidthUs = nowUs - turnSignalIsrPulseStartUs;
-    turnSignalIsrLastPulseAtUs = nowUs;
-  }
-}
-
 void updateTurnSignalPulseInput() {
-  noInterrupts();
-  bool rawHigh = turnSignalIsrRawHigh;
-  unsigned long pulseWidthUs = turnSignalIsrLastPulseWidthUs;
-  unsigned long lastPulseAtUs = turnSignalIsrLastPulseAtUs;
-  interrupts();
+  unsigned long adcPulseWidthUs = 0;
+  int adcPulsePeakMv = 0;
+  bool adcPulseValid = captureSteeringPulseByAdc(adcPulseWidthUs, adcPulsePeakMv);
+  if (adcPulseValid) {
+    if (!turnSignalPulseSmoothingReady) {
+      smoothedTurnSignalPulseUs = (float)adcPulseWidthUs;
+      turnSignalPulseSmoothingReady = true;
+    } else {
+      float delta = (float)adcPulseWidthUs - smoothedTurnSignalPulseUs;
+      float absDelta = delta < 0.0f ? -delta : delta;
+      if (absDelta > (float)STEERING_PULSE_DEADBAND_US) {
+        smoothedTurnSignalPulseUs += delta * STEERING_PULSE_FILTER_ALPHA;
+      }
+    }
 
-  bool pulseSeen = lastPulseAtUs != 0;
-  unsigned long pulseAgeUs = pulseSeen ?
-    (micros() - lastPulseAtUs) :
-    (TURN_SIGNAL_INPUT_STALE_US + 1);
+    turnSignalInputPulseWidthUs = (unsigned long)round(smoothedTurnSignalPulseUs);
+    turnSignalInputPulseFresh = true;
+    return;
+  }
 
-  turnSignalInputRawHigh = rawHigh;
-  turnSignalInputPulseWidthUs = pulseWidthUs;
-  turnSignalInputPulseAgeMs = pulseSeen ? (pulseAgeUs / 1000UL) : 0;
-  turnSignalInputPulseFresh = pulseSeen && pulseAgeUs <= TURN_SIGNAL_INPUT_STALE_US;
+  turnSignalInputPulseWidthUs = 0;
+  turnSignalInputPulseFresh = false;
+  turnSignalPulseSmoothingReady = false;
 }
 
-int readSteeringAverageMv(int sampleCount, int sampleDelayMs) {
+bool captureSteeringPulseByAdc(unsigned long &pulseWidthUs, int &pulsePeakMv) {
+  unsigned long captureStartUs = micros();
+  unsigned long pulseStartUs = 0;
+  bool waitingForLow = true;
+  bool waitingForRise = false;
+  bool waitingForFall = false;
+  pulsePeakMv = 0;
+
+  while ((micros() - captureStartUs) <= STEERING_PULSE_CAPTURE_WINDOW_US) {
+    int mv = analogReadMilliVolts(STEERING_INPUT_PIN);
+    if (mv > pulsePeakMv) {
+      pulsePeakMv = mv;
+    }
+
+    bool high = mv >= STEERING_PULSE_THRESHOLD_MV;
+
+    if (waitingForLow) {
+      if (!high) {
+        waitingForLow = false;
+        waitingForRise = true;
+      }
+      continue;
+    }
+
+    if (waitingForRise) {
+      if (high) {
+        pulseStartUs = micros();
+        waitingForRise = false;
+        waitingForFall = true;
+      }
+      continue;
+    }
+
+    if (waitingForFall && !high) {
+      pulseWidthUs = micros() - pulseStartUs;
+      return pulseWidthUs >= STEERING_PULSE_MIN_VALID_US &&
+        pulseWidthUs <= STEERING_PULSE_MAX_VALID_US;
+    }
+  }
+
+  return false;
+}
+
+unsigned long readSteeringPulseAverageUs(int sampleCount) {
   if (sampleCount <= 0) {
     sampleCount = 1;
   }
 
-  long mvTotal = 0;
+  unsigned long pulseTotalUs = 0;
+  int validSamples = 0;
   for (int i = 0; i < sampleCount; i++) {
-    mvTotal += analogReadMilliVolts(STEERING_INPUT_PIN);
-    if (sampleDelayMs > 0) {
-      delay(sampleDelayMs);
+    unsigned long pulseWidthUs = 0;
+    int pulsePeakMv = 0;
+    if (captureSteeringPulseByAdc(pulseWidthUs, pulsePeakMv)) {
+      pulseTotalUs += pulseWidthUs;
+      validSamples++;
     }
   }
 
-  return mvTotal / sampleCount;
+  if (validSamples == 0) {
+    return 0;
+  }
+  return pulseTotalUs / validSamples;
 }
 
 void saveSteeringCalibration() {
-  steeringPreferences.putInt("center_mv", steeringCenterMv);
-  steeringPreferences.putInt("left_mv", steeringLeftMv);
-  steeringPreferences.putInt("right_mv", steeringRightMv);
+  steeringPreferences.putUInt("center_us", steeringCenterUs);
+  steeringPreferences.putUInt("left_us", steeringLeftUs);
+  steeringPreferences.putUInt("right_us", steeringRightUs);
   steeringPreferences.putInt("threshold_deg", turnSignalThresholdDeg);
 }
 
 void loadSteeringCalibration() {
   steeringPreferences.begin("steering", false);
 
-  steeringCenterMv = readSteeringAverageMv(
-    STEERING_CALIBRATION_SAMPLE_COUNT,
-    STEERING_CALIBRATION_SAMPLE_DELAY_MS
+  steeringCenterUs = steeringPreferences.getUInt(
+    "center_us",
+    STEERING_DEFAULT_CENTER_US
   );
-  steeringInputMv = steeringCenterMv;
-  steeringInputMinMv = steeringCenterMv;
-  steeringInputMaxMv = steeringCenterMv;
-
-  steeringLeftMv = steeringPreferences.getInt(
-    "left_mv",
-    steeringCenterMv + STEERING_DEFAULT_LEFT_OFFSET_MV
+  steeringLeftUs = steeringPreferences.getUInt(
+    "left_us",
+    STEERING_DEFAULT_LEFT_US
   );
-  steeringRightMv = steeringPreferences.getInt(
-    "right_mv",
-    clampInt(steeringCenterMv - STEERING_DEFAULT_RIGHT_OFFSET_MV, 0, 3300)
+  steeringRightUs = steeringPreferences.getUInt(
+    "right_us",
+    STEERING_DEFAULT_RIGHT_US
   );
   turnSignalThresholdDeg = clampInt(
     steeringPreferences.getInt("threshold_deg", turnSignalThresholdDeg),
@@ -668,58 +701,33 @@ void loadSteeringCalibration() {
 }
 
 bool steeringCalibrationValid() {
-  return steeringRightMv < steeringCenterMv && steeringCenterMv < steeringLeftMv;
+  return steeringRightUs < steeringCenterUs && steeringCenterUs < steeringLeftUs;
 }
 
-float mapSteeringVoltageToAngle(int millivolts) {
+float mapSteeringPulseToAngle(unsigned long pulseWidthUs) {
   if (!steeringCalibrationValid()) {
     return 0.0f;
   }
 
-  if (millivolts <= steeringRightMv) {
+  if (pulseWidthUs <= steeringRightUs) {
     return STEERING_MAX_DEG;
   }
-  if (millivolts >= steeringLeftMv) {
+  if (pulseWidthUs >= steeringLeftUs) {
     return STEERING_MIN_DEG;
   }
-  if (millivolts < steeringCenterMv) {
-    float progress = (float)(steeringCenterMv - millivolts) /
-      (float)(steeringCenterMv - steeringRightMv);
+  if (pulseWidthUs < steeringCenterUs) {
+    float progress = (float)(steeringCenterUs - pulseWidthUs) /
+      (float)(steeringCenterUs - steeringRightUs);
     return progress * STEERING_MAX_DEG;
   }
 
-  float progress = (float)(millivolts - steeringCenterMv) /
-    (float)(steeringLeftMv - steeringCenterMv);
+  float progress = (float)(pulseWidthUs - steeringCenterUs) /
+    (float)(steeringLeftUs - steeringCenterUs);
   return progress * STEERING_MIN_DEG;
 }
 
 void updateSteeringInput() {
-  long rawTotal = 0;
-  long mvTotal = 0;
-  for (int i = 0; i < STEERING_SAMPLE_COUNT; i++) {
-    rawTotal += analogRead(STEERING_INPUT_PIN);
-    mvTotal += analogReadMilliVolts(STEERING_INPUT_PIN);
-  }
-  steeringInputRaw = rawTotal / STEERING_SAMPLE_COUNT;
-  steeringInputMv = mvTotal / STEERING_SAMPLE_COUNT;
-  if (steeringInputMv < steeringInputMinMv) {
-    steeringInputMinMv = steeringInputMv;
-  }
-  if (steeringInputMv > steeringInputMaxMv) {
-    steeringInputMaxMv = steeringInputMv;
-  }
-
-  if (!steeringCalibrationValid()) {
-    steeringInputValid = false;
-    steeringWheelAngleDeg = 0;
-    smoothedSteeringAngleDeg = 0.0f;
-    leftTurnSignalActive = false;
-    rightTurnSignalActive = false;
-    return;
-  }
-
-  if (steeringInputMv < STEERING_VALID_MIN_MV ||
-      steeringInputMv > STEERING_VALID_MAX_MV) {
+  if (!turnSignalInputPulseFresh || !steeringCalibrationValid()) {
     steeringInputValid = false;
     steeringWheelAngleDeg = 0;
     smoothedSteeringAngleDeg = 0.0f;
@@ -729,7 +737,7 @@ void updateSteeringInput() {
   }
 
   steeringInputValid = true;
-  float targetAngle = mapSteeringVoltageToAngle(steeringInputMv);
+  float targetAngle = mapSteeringPulseToAngle(turnSignalInputPulseWidthUs);
   smoothedSteeringAngleDeg +=
     (targetAngle - smoothedSteeringAngleDeg) * STEERING_SMOOTHING_ALPHA;
   steeringWheelAngleDeg = clampInt(
@@ -843,16 +851,9 @@ String headlightInputRawLabel() {
   return headlightInputRawHigh ? "HIGH" : "LOW";
 }
 
-String turnSignalInputRawLabel() {
-  return turnSignalInputRawHigh ? "HIGH" : "LOW";
-}
-
 String turnSignalInputPulseStatusLabel() {
   if (turnSignalInputPulseFresh) {
-    return "Receiving";
-  }
-  if (turnSignalInputPulseWidthUs > 0) {
-    return "Stale";
+    return "ADC receiving";
   }
   return "No pulse";
 }
@@ -864,20 +865,14 @@ String steeringInputStatusLabel() {
   if (steeringInputValid) {
     return "Online";
   }
-  if (steeringInputMv < STEERING_VALID_MIN_MV) {
-    return "Low / disconnected";
-  }
-  if (steeringInputMv > STEERING_VALID_MAX_MV) {
-    return "High / over range";
-  }
-  return "Invalid";
+  return "No pulse";
 }
 
 String steeringCalibrationStatusLabel() {
   if (steeringCalibrationValid()) {
     return "Valid";
   }
-  return "Invalid: right must be below center and left above center";
+  return "Invalid: right us must be below center us and left us above center us";
 }
 
 // ----------------------
@@ -912,8 +907,6 @@ void setup() {
   loadScreenBrightness();
   applyScreenBrightness();
   pinMode(STEERING_INPUT_PIN, INPUT);
-  turnSignalIsrRawHigh = digitalRead(STEERING_INPUT_PIN) == HIGH;
-  attachInterrupt(digitalPinToInterrupt(STEERING_INPUT_PIN), handleTurnSignalInputChange, CHANGE);
   analogReadResolution(12);
   analogSetPinAttenuation(STEERING_INPUT_PIN, ADC_0db);
   loadSteeringCalibration();

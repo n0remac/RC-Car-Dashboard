@@ -57,33 +57,24 @@ String htmlPage() {
     String("Accel Unavailable");
   String steeringAngleValue = String(steeringWheelAngleDeg);
   String turnThresholdValue = String(turnSignalThresholdDeg);
-  String steeringMvValue = String(steeringInputMv);
-  String steeringRawValue = String(steeringInputRaw);
-  String steeringMinMvValue = steeringInputMinMv == 9999 ? String("--") : String(steeringInputMinMv);
-  String steeringMaxMvValue = String(steeringInputMaxMv);
   String steeringStatusValue = steeringInputStatusLabel();
   String steeringValidValue = steeringInputValid ? String("Yes") : String("No");
   String turnSignalValue = turnSignalLabel();
   String turnSignalOutputValue = turnSignalOutputLabel();
   String turnSignalInputStatusValue = turnSignalInputPulseStatusLabel();
-  String turnSignalInputRawValue = turnSignalInputRawLabel();
   String turnSignalInputPulseValue = turnSignalInputPulseWidthUs > 0 ?
     String(turnSignalInputPulseWidthUs) :
     String("--");
-  String turnSignalInputPulseAgeValue = turnSignalInputPulseWidthUs > 0 ?
-    String(turnSignalInputPulseAgeMs) :
-    String("--");
   String headlightStateValue = headlightInputStatusLabel();
-  String headlightRawValue = headlightInputRawLabel();
   String headlightPulseValue = headlightInputPulseWidthUs > 0 ?
     String(headlightInputPulseWidthUs) :
     String("--");
   String headlightPulseAgeValue = headlightInputPulseWidthUs > 0 ?
     String(headlightInputPulseAgeMs) :
     String("--");
-  String steeringCenterValue = String(steeringCenterMv);
-  String steeringLeftValue = String(steeringLeftMv);
-  String steeringRightValue = String(steeringRightMv);
+  String steeringCenterValue = String(steeringCenterUs);
+  String steeringLeftValue = String(steeringLeftUs);
+  String steeringRightValue = String(steeringRightUs);
   String calibrationStatusValue = steeringCalibrationStatusLabel();
   String calibrationValidValue = steeringCalibrationValid() ? String("Yes") : String("No");
   String brightnessValue = String(screenBrightnessPercent);
@@ -586,14 +577,6 @@ String htmlPage() {
       </div>
       <div class="diagnostic-grid">
         <div class="diagnostic">
-          <span class="label">GPIO32 Voltage</span>
-          <span id="steeringVoltageValue">STEERING_MV</span> mV
-        </div>
-        <div class="diagnostic">
-          <span class="label">Raw ADC</span>
-          <span id="steeringRawValue">STEERING_RAW</span>
-        </div>
-        <div class="diagnostic">
           <span class="label">Input Status</span>
           <span id="steeringStatusValue">STEERING_STATUS</span>
         </div>
@@ -614,24 +597,12 @@ String htmlPage() {
           <span id="turnSignalInputStatusValue">TURN_SIGNAL_INPUT_STATUS</span>
         </div>
         <div class="diagnostic">
-          <span class="label">GPIO32 Level</span>
-          <span id="turnSignalInputRawValue">TURN_SIGNAL_INPUT_RAW</span>
-        </div>
-        <div class="diagnostic">
           <span class="label">GPIO32 Pulse</span>
           <span id="turnSignalInputPulseValue">TURN_SIGNAL_INPUT_PULSE</span>
         </div>
         <div class="diagnostic">
-          <span class="label">GPIO32 Pulse Age</span>
-          <span id="turnSignalInputPulseAgeValue">TURN_SIGNAL_INPUT_PULSE_AGE</span>
-        </div>
-        <div class="diagnostic">
           <span class="label">Headlights</span>
           <span id="headlightStateValue">HEADLIGHT_STATE</span>
-        </div>
-        <div class="diagnostic">
-          <span class="label">GPIO12 Raw</span>
-          <span id="headlightRawValue">HEADLIGHT_RAW</span>
         </div>
         <div class="diagnostic">
           <span class="label">GPIO12 Pulse</span>
@@ -642,20 +613,16 @@ String htmlPage() {
           <span id="headlightPulseAgeValue">HEADLIGHT_PULSE_AGE</span>
         </div>
         <div class="diagnostic">
-          <span class="label">Observed Min / Max</span>
-          <span id="steeringRangeValue">STEERING_MIN_MV / STEERING_MAX_MV</span> mV
-        </div>
-        <div class="diagnostic">
           <span class="label">Calibration</span>
           <span id="calibrationStatusValue">CALIBRATION_STATUS</span>
         </div>
         <div class="diagnostic">
           <span class="label">Center</span>
-          <span id="centerMvValue">CENTER_MV</span> mV
+          <span id="centerUsValue">CENTER_US</span> us
         </div>
         <div class="diagnostic">
           <span class="label">Left / Right</span>
-          <span id="leftRightMvValue">LEFT_MV / RIGHT_MV</span> mV
+          <span id="leftRightUsValue">LEFT_US / RIGHT_US</span> us
         </div>
       </div>
       <div class="slider-row">
@@ -679,16 +646,16 @@ String htmlPage() {
       </div>
       <div class="manual-grid">
         <label class="manual-field">
-          <span class="label">Center mV</span>
-          <input id="centerMvInput" type="number" min="0" max="3300" value="CENTER_MV">
+          <span class="label">Center us</span>
+          <input id="centerUsInput" type="number" min="900" max="2100" value="CENTER_US">
         </label>
         <label class="manual-field">
-          <span class="label">Left mV</span>
-          <input id="leftMvInput" type="number" min="0" max="3300" value="LEFT_MV">
+          <span class="label">Left us</span>
+          <input id="leftUsInput" type="number" min="900" max="2100" value="LEFT_US">
         </label>
         <label class="manual-field">
-          <span class="label">Right mV</span>
-          <input id="rightMvInput" type="number" min="0" max="3300" value="RIGHT_MV">
+          <span class="label">Right us</span>
+          <input id="rightUsInput" type="number" min="900" max="2100" value="RIGHT_US">
         </label>
         <label class="manual-field">
           <span class="label">Threshold deg</span>
@@ -793,27 +760,21 @@ String htmlPage() {
     const thresholdValue = document.getElementById('thresholdValue');
     const brightnessValue = document.getElementById('brightnessValue');
     const brightnessStatusValue = document.getElementById('brightnessStatusValue');
-    const steeringVoltageValue = document.getElementById('steeringVoltageValue');
-    const steeringRawValue = document.getElementById('steeringRawValue');
     const steeringStatusValue = document.getElementById('steeringStatusValue');
     const steeringValidValue = document.getElementById('steeringValidValue');
-    const steeringRangeValue = document.getElementById('steeringRangeValue');
     const turnSignalValue = document.getElementById('turnSignalValue');
     const turnSignalOutputValue = document.getElementById('turnSignalOutputValue');
     const turnSignalInputStatusValue = document.getElementById('turnSignalInputStatusValue');
-    const turnSignalInputRawValue = document.getElementById('turnSignalInputRawValue');
     const turnSignalInputPulseValue = document.getElementById('turnSignalInputPulseValue');
-    const turnSignalInputPulseAgeValue = document.getElementById('turnSignalInputPulseAgeValue');
     const headlightStateValue = document.getElementById('headlightStateValue');
-    const headlightRawValue = document.getElementById('headlightRawValue');
     const headlightPulseValue = document.getElementById('headlightPulseValue');
     const headlightPulseAgeValue = document.getElementById('headlightPulseAgeValue');
     const calibrationStatusValue = document.getElementById('calibrationStatusValue');
-    const centerMvValue = document.getElementById('centerMvValue');
-    const leftRightMvValue = document.getElementById('leftRightMvValue');
-    const centerMvInput = document.getElementById('centerMvInput');
-    const leftMvInput = document.getElementById('leftMvInput');
-    const rightMvInput = document.getElementById('rightMvInput');
+    const centerUsValue = document.getElementById('centerUsValue');
+    const leftRightUsValue = document.getElementById('leftRightUsValue');
+    const centerUsInput = document.getElementById('centerUsInput');
+    const leftUsInput = document.getElementById('leftUsInput');
+    const rightUsInput = document.getElementById('rightUsInput');
     const thresholdInput = document.getElementById('thresholdInput');
     const calibrationButtons = document.querySelectorAll('[data-calibrate]');
     const wifiStatusValue = document.getElementById('wifiStatusValue');
@@ -885,9 +846,9 @@ String htmlPage() {
 
     function sendManualCalibrationUpdate() {
       const params = new URLSearchParams();
-      params.set('center_mv', centerMvInput.value);
-      params.set('left_mv', leftMvInput.value);
-      params.set('right_mv', rightMvInput.value);
+      params.set('center_us', centerUsInput.value);
+      params.set('left_us', leftUsInput.value);
+      params.set('right_us', rightUsInput.value);
       params.set('turn_threshold', thresholdInput.value);
       sendSetUpdate(params);
     }
@@ -935,32 +896,26 @@ String htmlPage() {
       steeringSlider.value = state.steering_angle;
       steeringWheel.style.transform = 'rotate(' + state.steering_angle + 'deg)';
       steeringValue.textContent = state.steering_angle;
-      steeringVoltageValue.textContent = state.steering_mv;
-      steeringRawValue.textContent = state.steering_raw;
       steeringStatusValue.textContent = state.steering_status;
       steeringValidValue.textContent = state.steering_valid ? 'Yes' : 'No';
-      steeringRangeValue.textContent = state.steering_min_mv + ' / ' + state.steering_max_mv;
       turnSignalValue.textContent = state.turn_signal;
       turnSignalOutputValue.textContent = state.turn_signal_output;
       turnSignalInputStatusValue.textContent = state.turn_signal_input_status;
-      turnSignalInputRawValue.textContent = state.turn_signal_input_raw;
       turnSignalInputPulseValue.textContent = state.turn_signal_input_pulse_us > 0 ? state.turn_signal_input_pulse_us + ' us' : '--';
-      turnSignalInputPulseAgeValue.textContent = state.turn_signal_input_pulse_us > 0 ? state.turn_signal_input_pulse_age_ms + ' ms' : '--';
       headlightStateValue.textContent = state.headlight_status;
-      headlightRawValue.textContent = state.headlight_raw;
       headlightPulseValue.textContent = state.headlight_pulse_us > 0 ? state.headlight_pulse_us + ' us' : '--';
       headlightPulseAgeValue.textContent = state.headlight_pulse_us > 0 ? state.headlight_pulse_age_ms + ' ms' : '--';
       calibrationStatusValue.textContent = state.calibration_status;
       brightnessSlider.value = state.brightness;
       brightnessValue.textContent = state.brightness;
       brightnessStatusValue.textContent = state.brightness;
-      centerMvValue.textContent = state.center_mv;
-      leftRightMvValue.textContent = state.left_mv + ' / ' + state.right_mv;
+      centerUsValue.textContent = state.center_us;
+      leftRightUsValue.textContent = state.left_us + ' / ' + state.right_us;
       thresholdSlider.value = state.turn_threshold;
       thresholdValue.textContent = state.turn_threshold;
-      updateInputWhenIdle(centerMvInput, state.center_mv);
-      updateInputWhenIdle(leftMvInput, state.left_mv);
-      updateInputWhenIdle(rightMvInput, state.right_mv);
+      updateInputWhenIdle(centerUsInput, state.center_us);
+      updateInputWhenIdle(leftUsInput, state.left_us);
+      updateInputWhenIdle(rightUsInput, state.right_us);
       updateInputWhenIdle(thresholdInput, state.turn_threshold);
     }
 
@@ -1118,9 +1073,9 @@ String htmlPage() {
     thresholdSlider.addEventListener('change', sendThresholdChange);
     brightnessSlider.addEventListener('input', updateBrightnessPreview);
     brightnessSlider.addEventListener('change', sendBrightnessChange);
-    centerMvInput.addEventListener('change', sendManualCalibrationUpdate);
-    leftMvInput.addEventListener('change', sendManualCalibrationUpdate);
-    rightMvInput.addEventListener('change', sendManualCalibrationUpdate);
+    centerUsInput.addEventListener('change', sendManualCalibrationUpdate);
+    leftUsInput.addEventListener('change', sendManualCalibrationUpdate);
+    rightUsInput.addEventListener('change', sendManualCalibrationUpdate);
     thresholdInput.addEventListener('change', sendManualCalibrationUpdate);
     calibrationButtons.forEach(button => {
       button.addEventListener('click', () => sendCalibrationCapture(button.dataset.calibrate));
@@ -1161,15 +1116,11 @@ String htmlPage() {
   html.replace("TILT_TOLERANCE", tolerance);
   html.replace("AXIS_LABEL_BUTTON", axisLabelButton);
   html.replace("STEERING_ANGLE", steeringAngleValue);
-  html.replace("STEERING_MV", steeringMvValue);
-  html.replace("STEERING_RAW", steeringRawValue);
-  html.replace("STEERING_MIN_MV", steeringMinMvValue);
-  html.replace("STEERING_MAX_MV", steeringMaxMvValue);
   html.replace("STEERING_STATUS", steeringStatusValue);
   html.replace("STEERING_VALID", steeringValidValue);
-  html.replace("CENTER_MV", steeringCenterValue);
-  html.replace("LEFT_MV", steeringLeftValue);
-  html.replace("RIGHT_MV", steeringRightValue);
+  html.replace("CENTER_US", steeringCenterValue);
+  html.replace("LEFT_US", steeringLeftValue);
+  html.replace("RIGHT_US", steeringRightValue);
   html.replace("CALIBRATION_STATUS", calibrationStatusValue);
   html.replace("CALIBRATION_VALID", calibrationValidValue);
   html.replace("BRIGHTNESS_VALUE", brightnessValue);
@@ -1191,17 +1142,11 @@ String htmlPage() {
   html.replace("TURN_SIGNAL_VALUE", turnSignalValue);
   html.replace("TURN_SIGNAL_OUTPUT", turnSignalOutputValue);
   html.replace("TURN_SIGNAL_INPUT_STATUS", turnSignalInputStatusValue);
-  html.replace("TURN_SIGNAL_INPUT_RAW", turnSignalInputRawValue);
-  html.replace(
-    "TURN_SIGNAL_INPUT_PULSE_AGE",
-    turnSignalInputPulseAgeValue == "--" ? turnSignalInputPulseAgeValue : turnSignalInputPulseAgeValue + " ms"
-  );
   html.replace(
     "TURN_SIGNAL_INPUT_PULSE",
     turnSignalInputPulseValue == "--" ? turnSignalInputPulseValue : turnSignalInputPulseValue + " us"
   );
   html.replace("HEADLIGHT_STATE", headlightStateValue);
-  html.replace("HEADLIGHT_RAW", headlightRawValue);
   html.replace("HEADLIGHT_PULSE_AGE", headlightPulseAgeValue == "--" ? headlightPulseAgeValue : headlightPulseAgeValue + " ms");
   html.replace("HEADLIGHT_PULSE", headlightPulseValue == "--" ? headlightPulseValue : headlightPulseValue + " us");
   return html;
@@ -1217,24 +1162,12 @@ String stateJson() {
   json += String(steeringWheelAngleDeg);
   json += ",\"turn_threshold\":";
   json += String(turnSignalThresholdDeg);
-  json += ",\"steering_raw\":";
-  json += String(steeringInputRaw);
-  json += ",\"steering_mv\":";
-  json += String(steeringInputMv);
-  json += ",\"steering_min_mv\":";
-  if (steeringInputMinMv == 9999) {
-    json += "\"--\"";
-  } else {
-    json += String(steeringInputMinMv);
-  }
-  json += ",\"steering_max_mv\":";
-  json += String(steeringInputMaxMv);
-  json += ",\"center_mv\":";
-  json += String(steeringCenterMv);
-  json += ",\"left_mv\":";
-  json += String(steeringLeftMv);
-  json += ",\"right_mv\":";
-  json += String(steeringRightMv);
+  json += ",\"center_us\":";
+  json += String(steeringCenterUs);
+  json += ",\"left_us\":";
+  json += String(steeringLeftUs);
+  json += ",\"right_us\":";
+  json += String(steeringRightUs);
   json += ",\"calibration_valid\":";
   if (steeringCalibrationValid()) {
     json += "true";
@@ -1262,9 +1195,6 @@ String stateJson() {
   json += ",\"turn_signal_input_status\":\"";
   json += jsonEscape(turnSignalInputPulseStatusLabel());
   json += "\"";
-  json += ",\"turn_signal_input_raw\":\"";
-  json += jsonEscape(turnSignalInputRawLabel());
-  json += "\"";
   json += ",\"turn_signal_input_pulse_fresh\":";
   if (turnSignalInputPulseFresh) {
     json += "true";
@@ -1273,8 +1203,6 @@ String stateJson() {
   }
   json += ",\"turn_signal_input_pulse_us\":";
   json += String(turnSignalInputPulseWidthUs);
-  json += ",\"turn_signal_input_pulse_age_ms\":";
-  json += String(turnSignalInputPulseAgeMs);
   json += ",\"headlights_on\":";
   if (dashboardHeadlightsOn) {
     json += "true";
@@ -1283,9 +1211,6 @@ String stateJson() {
   }
   json += ",\"headlight_status\":\"";
   json += jsonEscape(headlightInputStatusLabel());
-  json += "\"";
-  json += ",\"headlight_raw\":\"";
-  json += jsonEscape(headlightInputRawLabel());
   json += "\"";
   json += ",\"headlight_pulse_fresh\":";
   if (headlightInputPulseFresh) {
@@ -1429,9 +1354,9 @@ void handleWifiDisconnect() {
 void handleSet() {
   bool liveSteeringUpdate = (
     server.hasArg("turn_threshold") ||
-    server.hasArg("center_mv") ||
-    server.hasArg("left_mv") ||
-    server.hasArg("right_mv") ||
+    server.hasArg("center_us") ||
+    server.hasArg("left_us") ||
+    server.hasArg("right_us") ||
     server.hasArg("calibrate") ||
     server.hasArg("brightness")
   ) &&
@@ -1501,35 +1426,44 @@ void handleSet() {
 
   if (server.hasArg("calibrate")) {
     String target = server.arg("calibrate");
-    int sampledMv = readSteeringAverageMv(
-      STEERING_CALIBRATION_SAMPLE_COUNT,
-      STEERING_CALIBRATION_SAMPLE_DELAY_MS
-    );
+    unsigned long sampledUs = readSteeringPulseAverageUs(STEERING_CALIBRATION_SAMPLE_COUNT);
 
-    if (target == "center") {
-      steeringCenterMv = sampledMv;
+    if (sampledUs > 0 && target == "center") {
+      steeringCenterUs = sampledUs;
       steeringSettingsChanged = true;
-    } else if (target == "left") {
-      steeringLeftMv = sampledMv;
+    } else if (sampledUs > 0 && target == "left") {
+      steeringLeftUs = sampledUs;
       steeringSettingsChanged = true;
-    } else if (target == "right") {
-      steeringRightMv = sampledMv;
+    } else if (sampledUs > 0 && target == "right") {
+      steeringRightUs = sampledUs;
       steeringSettingsChanged = true;
     }
   }
 
-  if (server.hasArg("center_mv")) {
-    steeringCenterMv = clampInt(server.arg("center_mv").toInt(), 0, 3300);
+  if (server.hasArg("center_us")) {
+    steeringCenterUs = clampInt(
+      server.arg("center_us").toInt(),
+      STEERING_PULSE_MIN_VALID_US,
+      STEERING_PULSE_MAX_VALID_US
+    );
     steeringSettingsChanged = true;
   }
 
-  if (server.hasArg("left_mv")) {
-    steeringLeftMv = clampInt(server.arg("left_mv").toInt(), 0, 3300);
+  if (server.hasArg("left_us")) {
+    steeringLeftUs = clampInt(
+      server.arg("left_us").toInt(),
+      STEERING_PULSE_MIN_VALID_US,
+      STEERING_PULSE_MAX_VALID_US
+    );
     steeringSettingsChanged = true;
   }
 
-  if (server.hasArg("right_mv")) {
-    steeringRightMv = clampInt(server.arg("right_mv").toInt(), 0, 3300);
+  if (server.hasArg("right_us")) {
+    steeringRightUs = clampInt(
+      server.arg("right_us").toInt(),
+      STEERING_PULSE_MIN_VALID_US,
+      STEERING_PULSE_MAX_VALID_US
+    );
     steeringSettingsChanged = true;
   }
 
