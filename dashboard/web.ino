@@ -62,15 +62,15 @@ String htmlPage() {
   String turnSignalValue = turnSignalLabel();
   String turnSignalOutputValue = turnSignalOutputLabel();
   String turnSignalInputStatusValue = turnSignalInputPulseStatusLabel();
-  String turnSignalInputPulseValue = turnSignalInputPulseWidthUs > 0 ?
-    String(turnSignalInputPulseWidthUs) :
+  String turnSignalInputPulseValue = turnSignalInput.pulseWidthUs > 0 ?
+    String(turnSignalInput.pulseWidthUs) :
     String("--");
   String headlightStateValue = headlightInputStatusLabel();
-  String headlightPulseValue = headlightInputPulseWidthUs > 0 ?
-    String(headlightInputPulseWidthUs) :
+  String headlightPulseValue = headlightInput.pulseWidthUs > 0 ?
+    String(headlightInput.pulseWidthUs) :
     String("--");
-  String headlightPulseAgeValue = headlightInputPulseWidthUs > 0 ?
-    String(headlightInputPulseAgeMs) :
+  String headlightPulseAgeValue = headlightInput.pulseWidthUs > 0 ?
+    String(headlightInput.pulseAgeMs) :
     String("--");
   String steeringCenterValue = String(steeringCenterUs);
   String steeringLeftValue = String(steeringLeftUs);
@@ -1196,13 +1196,13 @@ String stateJson() {
   json += jsonEscape(turnSignalInputPulseStatusLabel());
   json += "\"";
   json += ",\"turn_signal_input_pulse_fresh\":";
-  if (turnSignalInputPulseFresh) {
+  if (turnSignalInput.pulseFresh) {
     json += "true";
   } else {
     json += "false";
   }
   json += ",\"turn_signal_input_pulse_us\":";
-  json += String(turnSignalInputPulseWidthUs);
+  json += String(turnSignalInput.pulseWidthUs);
   json += ",\"headlights_on\":";
   if (dashboardHeadlightsOn) {
     json += "true";
@@ -1213,15 +1213,15 @@ String stateJson() {
   json += jsonEscape(headlightInputStatusLabel());
   json += "\"";
   json += ",\"headlight_pulse_fresh\":";
-  if (headlightInputPulseFresh) {
+  if (headlightInput.pulseFresh) {
     json += "true";
   } else {
     json += "false";
   }
   json += ",\"headlight_pulse_us\":";
-  json += String(headlightInputPulseWidthUs);
+  json += String(headlightInput.pulseWidthUs);
   json += ",\"headlight_pulse_age_ms\":";
-  json += String(headlightInputPulseAgeMs);
+  json += String(headlightInput.pulseAgeMs);
   json += ",\"brightness\":";
   json += String(screenBrightnessPercent);
   json += ",\"wifi_sta_status\":\"";

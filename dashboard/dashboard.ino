@@ -60,6 +60,21 @@ bool dashboardHeadlightsOn = false;
 int dashboardGearIndex = 3;
 String dashboardOdometer = "000000";
 
+struct RcPulseInput {
+  int pin;
+  unsigned long staleUs;
+  unsigned long minValidUs;
+  unsigned long maxValidUs;
+  bool rawHigh;
+  bool pulseFresh;
+  unsigned long pulseWidthUs;
+  unsigned long pulseAgeMs;
+  volatile bool isrRawHigh;
+  volatile unsigned long isrPulseStartUs;
+  volatile unsigned long isrLastPulseWidthUs;
+  volatile unsigned long isrLastPulseAtUs;
+};
+
 // ----------------------
 // Headlight input state
 // ----------------------
@@ -69,15 +84,20 @@ static const unsigned long HEADLIGHT_PULSE_MIN_VALID_US = 750UL;
 static const unsigned long HEADLIGHT_PULSE_ON_THRESHOLD_US = 2000UL;
 static const unsigned long HEADLIGHT_PULSE_MAX_VALID_US = 2500UL;
 
-bool headlightInputRawHigh = false;
-bool headlightInputPulseFresh = false;
-unsigned long headlightInputPulseWidthUs = 0;
-unsigned long headlightInputPulseAgeMs = 0;
-
-volatile bool headlightIsrRawHigh = false;
-volatile unsigned long headlightIsrPulseStartUs = 0;
-volatile unsigned long headlightIsrLastPulseWidthUs = 0;
-volatile unsigned long headlightIsrLastPulseAtUs = 0;
+RcPulseInput headlightInput = {
+  HEADLIGHT_INPUT_PIN,
+  HEADLIGHT_INPUT_STALE_US,
+  HEADLIGHT_PULSE_MIN_VALID_US,
+  HEADLIGHT_PULSE_MAX_VALID_US,
+  false,
+  false,
+  0,
+  0,
+  false,
+  0,
+  0,
+  0
+};
 
 unsigned long lastBlinkToggle = 0;
 bool warningOn = true;
@@ -94,12 +114,9 @@ static const unsigned long STEERING_DEFAULT_CENTER_US = 1500UL;
 static const unsigned long STEERING_DEFAULT_LEFT_US = 2000UL;
 static const int STEERING_CALIBRATION_SAMPLE_COUNT = 5;
 static const float STEERING_SMOOTHING_ALPHA = 0.25f;
-static const unsigned long STEERING_PULSE_CAPTURE_WINDOW_US = 25000UL;
 static const unsigned long STEERING_PULSE_MIN_VALID_US = 900UL;
 static const unsigned long STEERING_PULSE_MAX_VALID_US = 2100UL;
-static const int STEERING_PULSE_THRESHOLD_MV = 200;
-static const float STEERING_PULSE_FILTER_ALPHA = 0.20f;
-static const unsigned long STEERING_PULSE_DEADBAND_US = 8UL;
+static const unsigned long STEERING_PULSE_STALE_US = 250000UL;
 static const int TURN_SIGNAL_RELEASE_MARGIN_DEG = 3;
 static const int TURN_THRESHOLD_MIN_DEG = 0;
 static const int TURN_THRESHOLD_MAX_DEG = 45;
@@ -116,10 +133,20 @@ unsigned long steeringCenterUs = STEERING_DEFAULT_CENTER_US;
 unsigned long steeringLeftUs = STEERING_DEFAULT_LEFT_US;
 unsigned long steeringRightUs = STEERING_DEFAULT_RIGHT_US;
 int turnSignalThresholdDeg = 15;
-bool turnSignalInputPulseFresh = false;
-unsigned long turnSignalInputPulseWidthUs = 0;
-float smoothedTurnSignalPulseUs = 0.0f;
-bool turnSignalPulseSmoothingReady = false;
+RcPulseInput turnSignalInput = {
+  STEERING_INPUT_PIN,
+  STEERING_PULSE_STALE_US,
+  STEERING_PULSE_MIN_VALID_US,
+  STEERING_PULSE_MAX_VALID_US,
+  false,
+  false,
+  0,
+  0,
+  false,
+  0,
+  0,
+  0
+};
 
 // ----------------------
 // Environment sensor data
@@ -227,16 +254,19 @@ String wifiStationIpLabel();
 void applyTiltOrientation();
 void resetTiltReference();
 unsigned long readSteeringPulseAverageUs(int sampleCount);
+void initRcPulseInput(RcPulseInput &input);
+void IRAM_ATTR handleRcPulseInputChange(RcPulseInput &input);
+void updateRcPulseInput(RcPulseInput &input);
 void handleHeadlightInputChange();
 void updateHeadlightInput();
 String headlightInputStatusLabel();
 String headlightInputRawLabel();
+void handleTurnSignalInputChange();
 void updateTurnSignalPulseInput();
 String turnSignalInputPulseStatusLabel();
 void loadSteeringCalibration();
 void saveSteeringCalibration();
 bool steeringCalibrationValid();
-bool captureSteeringPulseByAdc(unsigned long &pulseWidthUs, int &pulsePeakMv);
 float mapSteeringPulseToAngle(unsigned long pulseWidthUs);
 void updateSteeringInput();
 void updateTurnSignalIntent();
@@ -537,114 +567,65 @@ String wifiStationIpLabel() {
   return "Unavailable";
 }
 
-void IRAM_ATTR handleHeadlightInputChange() {
-  bool rawHigh = digitalRead(HEADLIGHT_INPUT_PIN) == HIGH;
+void initRcPulseInput(RcPulseInput &input) {
+  pinMode(input.pin, INPUT);
+  input.isrRawHigh = digitalRead(input.pin) == HIGH;
+}
+
+void IRAM_ATTR handleRcPulseInputChange(RcPulseInput &input) {
+  bool rawHigh = digitalRead(input.pin) == HIGH;
   unsigned long nowUs = micros();
 
-  headlightIsrRawHigh = rawHigh;
+  input.isrRawHigh = rawHigh;
   if (rawHigh) {
-    headlightIsrPulseStartUs = nowUs;
-  } else if (headlightIsrPulseStartUs != 0) {
-    headlightIsrLastPulseWidthUs = nowUs - headlightIsrPulseStartUs;
-    headlightIsrLastPulseAtUs = nowUs;
+    input.isrPulseStartUs = nowUs;
+  } else if (input.isrPulseStartUs != 0) {
+    input.isrLastPulseWidthUs = nowUs - input.isrPulseStartUs;
+    input.isrLastPulseAtUs = nowUs;
   }
 }
 
-void updateHeadlightInput() {
+void updateRcPulseInput(RcPulseInput &input) {
   noInterrupts();
-  bool rawHigh = headlightIsrRawHigh;
-  unsigned long pulseWidthUs = headlightIsrLastPulseWidthUs;
-  unsigned long lastPulseAtUs = headlightIsrLastPulseAtUs;
+  bool rawHigh = input.isrRawHigh;
+  unsigned long pulseWidthUs = input.isrLastPulseWidthUs;
+  unsigned long lastPulseAtUs = input.isrLastPulseAtUs;
   interrupts();
 
   bool pulseSeen = lastPulseAtUs != 0;
   unsigned long pulseAgeUs = pulseSeen ?
     (micros() - lastPulseAtUs) :
-    (HEADLIGHT_INPUT_STALE_US + 1);
+    (input.staleUs + 1);
 
-  headlightInputRawHigh = rawHigh;
-  headlightInputPulseWidthUs = pulseWidthUs;
-  headlightInputPulseAgeMs = pulseSeen ? (pulseAgeUs / 1000UL) : 0;
-  headlightInputPulseFresh =
+  input.rawHigh = rawHigh;
+  input.pulseWidthUs = pulseWidthUs;
+  input.pulseAgeMs = pulseSeen ? (pulseAgeUs / 1000UL) : 0;
+  input.pulseFresh =
     pulseSeen &&
-    pulseAgeUs <= HEADLIGHT_INPUT_STALE_US &&
-    pulseWidthUs >= HEADLIGHT_PULSE_MIN_VALID_US &&
-    pulseWidthUs <= HEADLIGHT_PULSE_MAX_VALID_US;
+    pulseAgeUs <= input.staleUs &&
+    pulseWidthUs >= input.minValidUs &&
+    pulseWidthUs <= input.maxValidUs;
+}
 
-  if (headlightInputPulseFresh) {
-    dashboardHeadlightsOn = pulseWidthUs > HEADLIGHT_PULSE_ON_THRESHOLD_US;
+void IRAM_ATTR handleHeadlightInputChange() {
+  handleRcPulseInputChange(headlightInput);
+}
+
+void updateHeadlightInput() {
+  updateRcPulseInput(headlightInput);
+  if (headlightInput.pulseFresh) {
+    dashboardHeadlightsOn = headlightInput.pulseWidthUs > HEADLIGHT_PULSE_ON_THRESHOLD_US;
   } else {
-    dashboardHeadlightsOn = rawHigh;
+    dashboardHeadlightsOn = headlightInput.rawHigh;
   }
+}
+
+void IRAM_ATTR handleTurnSignalInputChange() {
+  handleRcPulseInputChange(turnSignalInput);
 }
 
 void updateTurnSignalPulseInput() {
-  unsigned long adcPulseWidthUs = 0;
-  int adcPulsePeakMv = 0;
-  bool adcPulseValid = captureSteeringPulseByAdc(adcPulseWidthUs, adcPulsePeakMv);
-  if (adcPulseValid) {
-    if (!turnSignalPulseSmoothingReady) {
-      smoothedTurnSignalPulseUs = (float)adcPulseWidthUs;
-      turnSignalPulseSmoothingReady = true;
-    } else {
-      float delta = (float)adcPulseWidthUs - smoothedTurnSignalPulseUs;
-      float absDelta = delta < 0.0f ? -delta : delta;
-      if (absDelta > (float)STEERING_PULSE_DEADBAND_US) {
-        smoothedTurnSignalPulseUs += delta * STEERING_PULSE_FILTER_ALPHA;
-      }
-    }
-
-    turnSignalInputPulseWidthUs = (unsigned long)round(smoothedTurnSignalPulseUs);
-    turnSignalInputPulseFresh = true;
-    return;
-  }
-
-  turnSignalInputPulseWidthUs = 0;
-  turnSignalInputPulseFresh = false;
-  turnSignalPulseSmoothingReady = false;
-}
-
-bool captureSteeringPulseByAdc(unsigned long &pulseWidthUs, int &pulsePeakMv) {
-  unsigned long captureStartUs = micros();
-  unsigned long pulseStartUs = 0;
-  bool waitingForLow = true;
-  bool waitingForRise = false;
-  bool waitingForFall = false;
-  pulsePeakMv = 0;
-
-  while ((micros() - captureStartUs) <= STEERING_PULSE_CAPTURE_WINDOW_US) {
-    int mv = analogReadMilliVolts(STEERING_INPUT_PIN);
-    if (mv > pulsePeakMv) {
-      pulsePeakMv = mv;
-    }
-
-    bool high = mv >= STEERING_PULSE_THRESHOLD_MV;
-
-    if (waitingForLow) {
-      if (!high) {
-        waitingForLow = false;
-        waitingForRise = true;
-      }
-      continue;
-    }
-
-    if (waitingForRise) {
-      if (high) {
-        pulseStartUs = micros();
-        waitingForRise = false;
-        waitingForFall = true;
-      }
-      continue;
-    }
-
-    if (waitingForFall && !high) {
-      pulseWidthUs = micros() - pulseStartUs;
-      return pulseWidthUs >= STEERING_PULSE_MIN_VALID_US &&
-        pulseWidthUs <= STEERING_PULSE_MAX_VALID_US;
-    }
-  }
-
-  return false;
+  updateRcPulseInput(turnSignalInput);
 }
 
 unsigned long readSteeringPulseAverageUs(int sampleCount) {
@@ -655,12 +636,12 @@ unsigned long readSteeringPulseAverageUs(int sampleCount) {
   unsigned long pulseTotalUs = 0;
   int validSamples = 0;
   for (int i = 0; i < sampleCount; i++) {
-    unsigned long pulseWidthUs = 0;
-    int pulsePeakMv = 0;
-    if (captureSteeringPulseByAdc(pulseWidthUs, pulsePeakMv)) {
-      pulseTotalUs += pulseWidthUs;
+    updateTurnSignalPulseInput();
+    if (turnSignalInput.pulseFresh) {
+      pulseTotalUs += turnSignalInput.pulseWidthUs;
       validSamples++;
     }
+    delay(20);
   }
 
   if (validSamples == 0) {
@@ -727,7 +708,7 @@ float mapSteeringPulseToAngle(unsigned long pulseWidthUs) {
 }
 
 void updateSteeringInput() {
-  if (!turnSignalInputPulseFresh || !steeringCalibrationValid()) {
+  if (!turnSignalInput.pulseFresh || !steeringCalibrationValid()) {
     steeringInputValid = false;
     steeringWheelAngleDeg = 0;
     smoothedSteeringAngleDeg = 0.0f;
@@ -737,7 +718,7 @@ void updateSteeringInput() {
   }
 
   steeringInputValid = true;
-  float targetAngle = mapSteeringPulseToAngle(turnSignalInputPulseWidthUs);
+  float targetAngle = mapSteeringPulseToAngle(turnSignalInput.pulseWidthUs);
   smoothedSteeringAngleDeg +=
     (targetAngle - smoothedSteeringAngleDeg) * STEERING_SMOOTHING_ALPHA;
   steeringWheelAngleDeg = clampInt(
@@ -841,19 +822,19 @@ String turnSignalOutputLabel() {
 }
 
 String headlightInputStatusLabel() {
-  if (headlightInputPulseFresh) {
+  if (headlightInput.pulseFresh) {
     return dashboardHeadlightsOn ? "On pulse" : "Off pulse";
   }
   return dashboardHeadlightsOn ? "High" : "Low";
 }
 
 String headlightInputRawLabel() {
-  return headlightInputRawHigh ? "HIGH" : "LOW";
+  return headlightInput.rawHigh ? "HIGH" : "LOW";
 }
 
 String turnSignalInputPulseStatusLabel() {
-  if (turnSignalInputPulseFresh) {
-    return "ADC receiving";
+  if (turnSignalInput.pulseFresh) {
+    return "Receiving";
   }
   return "No pulse";
 }
@@ -906,13 +887,11 @@ void setup() {
   pinMode(SCREEN_BACKLIGHT_PIN, OUTPUT);
   loadScreenBrightness();
   applyScreenBrightness();
-  pinMode(STEERING_INPUT_PIN, INPUT);
-  analogReadResolution(12);
-  analogSetPinAttenuation(STEERING_INPUT_PIN, ADC_0db);
+  initRcPulseInput(turnSignalInput);
+  attachInterrupt(digitalPinToInterrupt(STEERING_INPUT_PIN), handleTurnSignalInputChange, CHANGE);
   loadSteeringCalibration();
   updateTurnSignalPulseInput();
-  pinMode(HEADLIGHT_INPUT_PIN, INPUT);
-  headlightIsrRawHigh = digitalRead(HEADLIGHT_INPUT_PIN) == HIGH;
+  initRcPulseInput(headlightInput);
   attachInterrupt(digitalPinToInterrupt(HEADLIGHT_INPUT_PIN), handleHeadlightInputChange, CHANGE);
   updateHeadlightInput();
   pinMode(LEFT_TURN_LED_PIN, OUTPUT);
