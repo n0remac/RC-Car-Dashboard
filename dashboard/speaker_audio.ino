@@ -59,7 +59,8 @@ String speakerI2sStatusLabel() {
 bool initSpeakerI2sForFormat(
   uint32_t sampleRate,
   uint8_t channels,
-  uint8_t bitsPerSample
+  uint8_t bitsPerSample,
+  bool lowLatency
 ) {
   if (audioI2sPinConflicts()) {
     speakerI2sReady = false;
@@ -92,6 +93,13 @@ bool initSpeakerI2sForFormat(
   cfg.sample_rate = sampleRate;
   cfg.bits_per_sample = bitsPerSample;
   cfg.channels = channels;
+  if (lowLatency) {
+    // Two 64-frame DMA buffers are about 5.8 ms at the horn's 22.05 kHz
+    // mono format. The continuous horn task can keep them fed without
+    // inserting a perceptible queue of silence before a trigger.
+    cfg.buffer_count = 2;
+    cfg.buffer_size = 64;
+  }
 
   if (!speakerI2s.begin(cfg)) {
     speakerI2sReady = false;
@@ -131,5 +139,22 @@ bool prepareSpeakerI2sForBrowserAudio(
   speakerI2s.end();
   speakerI2sReady = false;
 
-  return initSpeakerI2sForFormat(sampleRate, channels, bitsPerSample);
+  return initSpeakerI2sForFormat(sampleRate, channels, bitsPerSample, false);
+}
+
+bool prepareSpeakerI2sForHorn(
+  uint32_t sampleRate,
+  uint8_t channels,
+  uint8_t bitsPerSample
+) {
+  if (audioI2sPinConflicts()) {
+    speakerI2sReady = false;
+    speakerI2sStatus = "Pin conflict";
+    return false;
+  }
+
+  speakerI2s.end();
+  speakerI2sReady = false;
+
+  return initSpeakerI2sForFormat(sampleRate, channels, bitsPerSample, true);
 }

@@ -43,6 +43,7 @@ bool prepareSpeakerI2sForBrowserAudio(
 
 String speakerI2sStatusLabel();
 bool hornSynthIsActive();
+void invalidateHornSynthOutput();
 
 bool browserAudioStorageMounted = false;
 String browserAudioStorageStatus = "Not mounted";
@@ -374,6 +375,7 @@ bool startBrowserAudioPlayback(String &message) {
     return false;
   }
 
+  invalidateHornSynthOutput();
   if (!prepareSpeakerI2sForBrowserAudio(
         browserAudioSavedInfo.sampleRate,
         browserAudioSavedInfo.channels,

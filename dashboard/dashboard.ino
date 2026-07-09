@@ -311,7 +311,6 @@ bool startHornSynth(String &message);
 void stopHornSynth();
 void triggerShortHornSynth(uint16_t durationMs);
 void cancelHornSynth();
-void updateHornSynth();
 bool hornSynthIsActive();
 String hornSynthStatusLabel();
 void handleHornMode();
@@ -1272,7 +1271,6 @@ void loop() {
   updateHeadlightInput();
   updateSoundSwitchInput();
   updateHornPlayback();
-  updateHornSynth();
   updateTurnSignalPulseInput();
   updateThrottleInput();
   updateSteeringInput();
@@ -1304,6 +1302,6 @@ void loop() {
   }
 
   if (!browserAudioIsPlaying() && !hornSynthIsActive()) {
-    delay(20);
+    delay(2);
   }
 }
