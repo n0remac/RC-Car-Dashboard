@@ -108,6 +108,11 @@ String htmlPage() {
   String audioFileInfoValue = browserAudioFileInfoLabel();
   String audioPlaybackValue = browserAudioIsPlaying() ? String("Playing") : String("Stopped");
   String audioStatusValue = browserAudioStatusLabel();
+  String hornModeValue = hornWebModeLabel();
+  String hornRcRequestedValue = rcHornRequested ? String("Yes") : String("No");
+  String hornRequestedValue = hornPlaybackRequested() ? String("Yes") : String("No");
+  String hornSynthActiveValue = hornSynthIsActive() ? String("Yes") : String("No");
+  String hornSynthStatusValue = hornSynthStatusLabel();
 
   String html = R"HTML(
 <!DOCTYPE html>
@@ -327,6 +332,26 @@ String htmlPage() {
       grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
       gap: 10px;
     }
+    .horn-mode {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 2px;
+      background: #101010;
+      border: 1px solid #3a3a3a;
+      border-radius: 10px;
+      padding: 2px;
+    }
+    .horn-mode button {
+      border-radius: 8px;
+      padding: 11px 8px;
+      background: transparent;
+      color: #b9b9b9;
+      font-size: 14px;
+    }
+    .horn-mode button.active {
+      background: #0f766e;
+      color: #ffffff;
+    }
     .audio-message {
       color: #d8d8d8;
       font-size: 14px;
@@ -509,6 +534,31 @@ String htmlPage() {
           <span class="label">Status</span>
           <span id="audioStatusValue">AUDIO_STATUS</span>
         </div>
+        <div class="diagnostic">
+          <span class="label">Horn Override</span>
+          <span id="hornModeValue">HORN_MODE</span>
+        </div>
+        <div class="diagnostic">
+          <span class="label">RC Horn Request</span>
+          <span id="hornRcRequestedValue">HORN_RC_REQUESTED</span>
+        </div>
+        <div class="diagnostic">
+          <span class="label">Horn Requested</span>
+          <span id="hornRequestedValue">HORN_REQUESTED</span>
+        </div>
+        <div class="diagnostic">
+          <span class="label">Horn Synth Active</span>
+          <span id="hornSynthActiveValue">HORN_SYNTH_ACTIVE</span>
+        </div>
+        <div class="diagnostic">
+          <span class="label">Horn Synth</span>
+          <span id="hornSynthStatusValue">HORN_SYNTH_STATUS</span>
+        </div>
+      </div>
+      <div class="horn-mode" role="group" aria-label="Horn override">
+        <button data-horn-mode="off" type="button">Off</button>
+        <button data-horn-mode="rc" type="button">RC</button>
+        <button data-horn-mode="on" type="button">On</button>
       </div>
       <label class="manual-field">
         <span class="label">PCM WAV File</span>
@@ -516,8 +566,7 @@ String htmlPage() {
       </label>
       <div class="audio-actions">
         <button class="secondary" id="audioUploadButton" type="button">Upload</button>
-        <button class="tertiary" id="audioPlayButton" type="button">Play</button>
-        <button class="warning" id="audioStopButton" type="button">Stop</button>
+        <button class="tertiary" id="hornShortButton" type="button">Honk</button>
       </div>
       <div class="audio-message" id="audioMessageValue">AUDIO_STATUS</div>
     </div>
@@ -842,10 +891,15 @@ String htmlPage() {
     const audioPlaybackValue = document.getElementById('audioPlaybackValue');
     const audioFileInfoValue = document.getElementById('audioFileInfoValue');
     const audioStatusValue = document.getElementById('audioStatusValue');
+    const hornModeValue = document.getElementById('hornModeValue');
+    const hornRcRequestedValue = document.getElementById('hornRcRequestedValue');
+    const hornRequestedValue = document.getElementById('hornRequestedValue');
+    const hornSynthActiveValue = document.getElementById('hornSynthActiveValue');
+    const hornSynthStatusValue = document.getElementById('hornSynthStatusValue');
+    const hornModeButtons = document.querySelectorAll('[data-horn-mode]');
     const audioFileInput = document.getElementById('audioFileInput');
     const audioUploadButton = document.getElementById('audioUploadButton');
-    const audioPlayButton = document.getElementById('audioPlayButton');
-    const audioStopButton = document.getElementById('audioStopButton');
+    const hornShortButton = document.getElementById('hornShortButton');
     const audioMessageValue = document.getElementById('audioMessageValue');
     let submitTimer = 0;
 
@@ -929,10 +983,20 @@ String htmlPage() {
       audioPlaybackValue.textContent = state.audio_playing ? 'Playing' : 'Stopped';
       audioFileInfoValue.textContent = state.audio_file_info;
       audioStatusValue.textContent = state.audio_status;
-      audioMessageValue.textContent = state.audio_status;
-      audioUploadButton.disabled = !state.audio_storage_ready;
-      audioPlayButton.disabled = !state.audio_storage_ready || !state.audio_file_saved || state.audio_playing;
-      audioStopButton.disabled = !state.audio_playing;
+      const hornModeLabels = { off: 'Off', rc: 'RC', on: 'On' };
+      hornModeValue.textContent = hornModeLabels[state.horn_web_mode] || 'RC';
+      hornRcRequestedValue.textContent = state.horn_rc_requested ? 'Yes' : 'No';
+      hornRequestedValue.textContent = state.horn_requested ? 'Yes' : 'No';
+      hornSynthActiveValue.textContent = state.horn_synth_active ? 'Yes' : 'No';
+      hornSynthStatusValue.textContent = state.horn_synth_status;
+      audioMessageValue.textContent = state.horn_synth_active ? state.horn_synth_status : state.audio_status;
+      hornModeButtons.forEach(button => {
+        const active = button.dataset.hornMode === state.horn_web_mode;
+        button.classList.toggle('active', active);
+        button.setAttribute('aria-pressed', active ? 'true' : 'false');
+      });
+      audioUploadButton.disabled = !state.audio_storage_ready || state.horn_synth_active;
+      hornShortButton.disabled = state.horn_web_mode === 'off';
     }
 
     function applySteeringState(state) {
@@ -1102,20 +1166,26 @@ String htmlPage() {
         });
     }
 
-    function playBrowserAudio() {
-      fetch('/audio/play', { method: 'POST' })
+    function setHornMode(mode) {
+      const params = new URLSearchParams();
+      params.set('mode', mode);
+      fetch('/audio/horn', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: params.toString()
+      })
         .then(handleAudioJsonResponse)
         .catch(() => {
-          setAudioMessage('Play request failed.');
+          setAudioMessage('Horn mode request failed.');
           pollSteeringState();
         });
     }
 
-    function stopBrowserAudio() {
-      fetch('/audio/stop', { method: 'POST' })
+    function triggerShortHorn() {
+      fetch('/audio/horn/short', { method: 'POST' })
         .then(handleAudioJsonResponse)
         .catch(() => {
-          setAudioMessage('Stop request failed.');
+          setAudioMessage('Horn honk request failed.');
           pollSteeringState();
         });
     }
@@ -1135,8 +1205,10 @@ String htmlPage() {
     wifiConnectButton.addEventListener('click', connectWifiNetwork);
     wifiDisconnectButton.addEventListener('click', disconnectWifiNetwork);
     audioUploadButton.addEventListener('click', uploadBrowserAudio);
-    audioPlayButton.addEventListener('click', playBrowserAudio);
-    audioStopButton.addEventListener('click', stopBrowserAudio);
+    hornShortButton.addEventListener('click', triggerShortHorn);
+    hornModeButtons.forEach(button => {
+      button.addEventListener('click', () => setHornMode(button.dataset.hornMode));
+    });
     pollSteeringState();
     setInterval(pollSteeringState, 250);
   </script>
@@ -1189,6 +1261,11 @@ String htmlPage() {
   html.replace("AUDIO_FILE_INFO", audioFileInfoValue);
   html.replace("AUDIO_PLAYBACK", audioPlaybackValue);
   html.replace("AUDIO_STATUS", audioStatusValue);
+  html.replace("HORN_MODE", hornModeValue);
+  html.replace("HORN_RC_REQUESTED", hornRcRequestedValue);
+  html.replace("HORN_REQUESTED", hornRequestedValue);
+  html.replace("HORN_SYNTH_ACTIVE", hornSynthActiveValue);
+  html.replace("HORN_SYNTH_STATUS", hornSynthStatusValue);
   html.replace("TURN_THRESHOLD", turnThresholdValue);
   html.replace("TURN_SIGNAL_VALUE", turnSignalValue);
   html.replace("TURN_SIGNAL_OUTPUT", turnSignalOutputValue);
@@ -1298,6 +1375,30 @@ String stateJson() {
   json += String(soundSwitchInput.pulseWidthUs);
   json += ",\"sound_switch_pulse_age_ms\":";
   json += String(soundSwitchInput.pulseAgeMs);
+  json += ",\"horn_web_mode\":\"";
+  json += hornWebModeValue();
+  json += "\"";
+  json += ",\"horn_rc_requested\":";
+  if (rcHornRequested) {
+    json += "true";
+  } else {
+    json += "false";
+  }
+  json += ",\"horn_requested\":";
+  if (hornPlaybackRequested()) {
+    json += "true";
+  } else {
+    json += "false";
+  }
+  json += ",\"horn_synth_active\":";
+  if (hornSynthIsActive()) {
+    json += "true";
+  } else {
+    json += "false";
+  }
+  json += ",\"horn_synth_status\":\"";
+  json += jsonEscape(hornSynthStatusLabel());
+  json += "\"";
   json += ",\"throttle_status\":\"";
   json += jsonEscape(throttleInputStatusLabel());
   json += "\"";

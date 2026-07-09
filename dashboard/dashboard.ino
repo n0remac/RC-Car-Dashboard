@@ -111,7 +111,7 @@ RcPulseInput headlightInput = {
 static const int SOUND_SWITCH_INPUT_PIN = 39;
 static const unsigned long SOUND_SWITCH_INPUT_STALE_US = HEADLIGHT_INPUT_STALE_US;
 static const unsigned long SOUND_SWITCH_PULSE_MIN_VALID_US = HEADLIGHT_PULSE_MIN_VALID_US;
-static const unsigned long SOUND_SWITCH_PULSE_ON_THRESHOLD_US = HEADLIGHT_PULSE_ON_THRESHOLD_US;
+static const unsigned long SOUND_SWITCH_PULSE_ON_THRESHOLD_US = 2000UL;
 static const unsigned long SOUND_SWITCH_PULSE_MAX_VALID_US = HEADLIGHT_PULSE_MAX_VALID_US;
 
 RcPulseInput soundSwitchInput = {
@@ -129,7 +129,18 @@ RcPulseInput soundSwitchInput = {
   0
 };
 bool soundSwitchOn = false;
-bool soundSwitchWasOn = false;
+bool rcHornRequested = false;
+bool webHornRequested = false;
+bool hornWasRequested = false;
+
+enum class HornWebMode : uint8_t {
+  Off,
+  Rc,
+  On
+};
+
+HornWebMode hornWebMode = HornWebMode::Rc;
+static const uint16_t WEB_SHORT_HORN_DURATION_MS = 220;
 
 unsigned long lastBlinkToggle = 0;
 bool warningOn = true;
@@ -283,7 +294,6 @@ String speakerI2sStatusLabel();
 String speakerI2sPinsLabel();
 
 bool browserAudioIsPlaying();
-void setBrowserAudioLoopRequested(bool enabled);
 void initBrowserAudioStorage();
 void updateBrowserAudioPlayback();
 bool browserAudioStorageReady();
@@ -294,12 +304,20 @@ bool browserAudioFileSaved();
 size_t browserAudioFileSize();
 String browserAudioFileInfoLabel();
 String browserAudioStatusLabel();
-bool startBrowserAudioPlayback(String &message);
-void stopBrowserAudioPlayback(const String &status);
 void handleBrowserAudioUpload();
 void handleBrowserAudioUploadComplete();
-void handleBrowserAudioPlay();
-void handleBrowserAudioStop();
+bool initHornSynth();
+bool startHornSynth(String &message);
+void stopHornSynth();
+void triggerShortHornSynth(uint16_t durationMs);
+void cancelHornSynth();
+void updateHornSynth();
+bool hornSynthIsActive();
+String hornSynthStatusLabel();
+void handleHornMode();
+void handleShortHorn();
+String hornResponseJson(bool ok, const String &message);
+void sendHornResponse(int code, bool ok, const String &message);
 
 bool initBME280();
 void updateEnvironment();
@@ -328,7 +346,11 @@ void updateHeadlightInput();
 String headlightInputStatusLabel();
 String headlightInputRawLabel();
 void handleSoundSwitchInputChange();
-void updateSoundSwitchInput(bool allowPlayback);
+void updateSoundSwitchInput();
+void updateHornPlayback();
+bool hornPlaybackRequested();
+const char *hornWebModeValue();
+String hornWebModeLabel();
 String soundSwitchInputStatusLabel();
 void handleThrottleInputChange();
 void updateThrottleInput();
@@ -724,26 +746,120 @@ void IRAM_ATTR handleSoundSwitchInputChange() {
   handleRcPulseInputChange(soundSwitchInput);
 }
 
-void updateSoundSwitchInput(bool allowPlayback) {
+void updateSoundSwitchInput() {
   updateRcPulseInput(soundSwitchInput);
   soundSwitchOn =
     soundSwitchInput.pulseFresh &&
     soundSwitchInput.pulseWidthUs > SOUND_SWITCH_PULSE_ON_THRESHOLD_US;
+  rcHornRequested = soundSwitchOn;
+}
 
-  if (allowPlayback) {
-    if (soundSwitchOn) {
-      setBrowserAudioLoopRequested(true);
-      if (!browserAudioIsPlaying() && !soundSwitchWasOn) {
-        String playbackMessage;
-        startBrowserAudioPlayback(playbackMessage);
-      }
-    } else if (soundSwitchWasOn) {
-      setBrowserAudioLoopRequested(false);
-      stopBrowserAudioPlayback("Stopped");
-    }
+bool hornPlaybackRequested() {
+  if (hornWebMode == HornWebMode::Off) {
+    return false;
+  }
+  return rcHornRequested || webHornRequested;
+}
+
+const char *hornWebModeValue() {
+  switch (hornWebMode) {
+    case HornWebMode::Off:
+      return "off";
+    case HornWebMode::On:
+      return "on";
+    case HornWebMode::Rc:
+    default:
+      return "rc";
+  }
+}
+
+String hornWebModeLabel() {
+  if (hornWebMode == HornWebMode::Off) {
+    return "Off";
+  }
+  if (hornWebMode == HornWebMode::On) {
+    return "On";
+  }
+  return "RC";
+}
+
+bool setHornWebMode(const String &value) {
+  String mode = value;
+  mode.trim();
+  mode.toLowerCase();
+
+  if (mode == "off") {
+    hornWebMode = HornWebMode::Off;
+  } else if (mode == "rc") {
+    hornWebMode = HornWebMode::Rc;
+  } else if (mode == "on") {
+    hornWebMode = HornWebMode::On;
+  } else {
+    return false;
   }
 
-  soundSwitchWasOn = soundSwitchOn;
+  webHornRequested = hornWebMode == HornWebMode::On;
+  if (hornWebMode == HornWebMode::Off) {
+    cancelHornSynth();
+  }
+  return true;
+}
+
+void updateHornPlayback() {
+  webHornRequested = hornWebMode == HornWebMode::On;
+  bool hornRequested = hornPlaybackRequested();
+
+  if (hornRequested == hornWasRequested) {
+    return;
+  }
+
+  if (hornRequested) {
+    String playbackMessage;
+    startHornSynth(playbackMessage);
+  } else {
+    stopHornSynth();
+  }
+
+  hornWasRequested = hornRequested;
+}
+
+void handleHornMode() {
+  if (!server.hasArg("mode") || !setHornWebMode(server.arg("mode"))) {
+    sendHornResponse(400, false, "Horn mode must be off, rc, or on");
+    return;
+  }
+
+  sendHornResponse(200, true, String("Horn mode: ") + hornWebModeLabel());
+}
+
+void handleShortHorn() {
+  if (hornWebMode == HornWebMode::Off) {
+    sendHornResponse(409, false, "Set horn override to RC or On first");
+    return;
+  }
+
+  triggerShortHornSynth(WEB_SHORT_HORN_DURATION_MS);
+  sendHornResponse(200, true, "Horn honk");
+}
+
+String hornResponseJson(bool ok, const String &message) {
+  String json = "{";
+  json += "\"ok\":";
+  json += ok ? "true" : "false";
+  json += ",\"message\":\"";
+  json += jsonEscape(message);
+  json += "\",\"horn_web_mode\":\"";
+  json += hornWebModeValue();
+  json += "\",\"horn_synth_active\":";
+  json += hornSynthIsActive() ? "true" : "false";
+  json += ",\"horn_synth_status\":\"";
+  json += jsonEscape(hornSynthStatusLabel());
+  json += "\"}";
+  return json;
+}
+
+void sendHornResponse(int code, bool ok, const String &message) {
+  server.send(code, "application/json", hornResponseJson(ok, message));
 }
 
 void IRAM_ATTR handleTurnSignalInputChange() {
@@ -1086,7 +1202,7 @@ void setup() {
   updateHeadlightInput();
   initRcPulseInput(soundSwitchInput);
   attachInterrupt(digitalPinToInterrupt(SOUND_SWITCH_INPUT_PIN), handleSoundSwitchInputChange, CHANGE);
-  updateSoundSwitchInput(false);
+  updateSoundSwitchInput();
   initRcPulseInput(throttleInput);
   attachInterrupt(digitalPinToInterrupt(THROTTLE_INPUT_PIN), handleThrottleInputChange, CHANGE);
   updateThrottleInput();
@@ -1103,6 +1219,7 @@ void setup() {
   tft.setRotation(1);
 
   initBrowserAudioStorage();
+  initHornSynth();
 
   spr.setColorDepth(8);
   screenSpriteAvailable = spr.createSprite(SCREEN_W, SCREEN_H) != nullptr;
@@ -1144,8 +1261,8 @@ void setup() {
   server.on("/wifi/connect", HTTP_POST, handleWifiConnect);
   server.on("/wifi/disconnect", HTTP_POST, handleWifiDisconnect);
   server.on("/audio/upload", HTTP_POST, handleBrowserAudioUploadComplete, handleBrowserAudioUpload);
-  server.on("/audio/play", HTTP_POST, handleBrowserAudioPlay);
-  server.on("/audio/stop", HTTP_POST, handleBrowserAudioStop);
+  server.on("/audio/horn", HTTP_POST, handleHornMode);
+  server.on("/audio/horn/short", HTTP_POST, handleShortHorn);
   server.begin();
 
   renderCurrentScreen();
@@ -1153,13 +1270,17 @@ void setup() {
 
 void loop() {
   updateHeadlightInput();
-  updateSoundSwitchInput(true);
+  updateSoundSwitchInput();
+  updateHornPlayback();
+  updateHornSynth();
   updateTurnSignalPulseInput();
   updateThrottleInput();
   updateSteeringInput();
   updateTurnSignalOutputs();
   server.handleClient();
-  updateBrowserAudioPlayback();
+  if (!hornSynthIsActive()) {
+    updateBrowserAudioPlayback();
+  }
   updateGps();
   updateIMU();
   updateSpeedFusion();
@@ -1182,7 +1303,7 @@ void loop() {
     renderCurrentScreen();
   }
 
-  if (!browserAudioIsPlaying()) {
+  if (!browserAudioIsPlaying() && !hornSynthIsActive()) {
     delay(20);
   }
 }
