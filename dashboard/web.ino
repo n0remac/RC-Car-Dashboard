@@ -63,13 +63,21 @@ String htmlPage() {
   String turnSignalValue = turnSignalLabel();
   String turnSignalOutputValue = turnSignalOutputLabel();
   String turnSignalInputStatusValue = turnSignalInputPulseStatusLabel();
-  String turnSignalInputPulseValue = vehicleControl.steeringPulseUs > 0 ?
+  String turnSignalInputPulseValue = steeringReceiverInput.pulseWidthUs > 0 ?
+    String(steeringReceiverInput.pulseWidthUs) :
+    String("--");
+  String turnSignalFilteredPulseValue = vehicleControl.steeringPulseUs > 0 ?
     String(vehicleControl.steeringPulseUs) :
     String("--");
+  String turnSignalFilterValue = steeringReceiverInput.filterReady ? String("Ready") : String("Collecting");
   String headlightStateValue = headlightInputStatusLabel();
   String headlightPulseValue = headlightInput.pulseWidthUs > 0 ?
     String(headlightInput.pulseWidthUs) :
     String("--");
+  String headlightFilteredPulseValue = headlightInput.filteredPulseWidthUs > 0 ?
+    String(headlightInput.filteredPulseWidthUs) :
+    String("--");
+  String headlightFilterValue = headlightInput.filterReady ? String("Ready") : String("Collecting");
   String headlightPulseAgeValue = headlightInput.pulseWidthUs > 0 ?
     String(headlightInput.pulseAgeMs) :
     String("--");
@@ -77,6 +85,10 @@ String htmlPage() {
   String soundSwitchPulseValue = soundSwitchInput.pulseWidthUs > 0 ?
     String(soundSwitchInput.pulseWidthUs) :
     String("--");
+  String soundSwitchFilteredPulseValue = soundSwitchInput.filteredPulseWidthUs > 0 ?
+    String(soundSwitchInput.filteredPulseWidthUs) :
+    String("--");
+  String soundSwitchFilterValue = soundSwitchInput.filterReady ? String("Ready") : String("Collecting");
   String soundSwitchPulseAgeValue = soundSwitchInput.pulseWidthUs > 0 ?
     String(soundSwitchInput.pulseAgeMs) :
     String("--");
@@ -84,6 +96,10 @@ String htmlPage() {
   String throttlePulseValue = vehicleControl.throttlePulseUs > 0 ?
     String(vehicleControl.throttlePulseUs) :
     String("--");
+  String throttleRawPulseValue = throttleReceiverInput.pulseWidthUs > 0 ?
+    String(throttleReceiverInput.pulseWidthUs) :
+    String("--");
+  String throttleFilterValue = throttleReceiverInput.filterReady ? String("Ready") : String("Collecting");
   String throttlePulseAgeValue = vehicleControl.mode == VehicleControlMode::Receiver ?
     (throttleReceiverInput.pulseFresh ? String(throttleReceiverInput.pulseAgeMs) : String("--")) :
     (vehicleControl.armed ? String(vehicleControlHeartbeatAgeMs()) : String("--"));
@@ -661,16 +677,32 @@ String htmlPage() {
           <span id="turnSignalInputStatusValue">TURN_SIGNAL_INPUT_STATUS</span>
         </div>
         <div class="diagnostic">
-          <span class="label">GPIO32 Signal Pulse</span>
+          <span class="label">GPIO32 Raw Pulse</span>
           <span id="turnSignalInputPulseValue">TURN_SIGNAL_INPUT_PULSE</span>
+        </div>
+        <div class="diagnostic">
+          <span class="label">GPIO32 Filtered Pulse</span>
+          <span id="turnSignalFilteredPulseValue">TURN_SIGNAL_FILTERED_PULSE</span>
+        </div>
+        <div class="diagnostic">
+          <span class="label">GPIO32 Filter</span>
+          <span id="turnSignalFilterValue">TURN_SIGNAL_FILTER</span>
         </div>
         <div class="diagnostic">
           <span class="label">Headlights</span>
           <span id="headlightStateValue">HEADLIGHT_STATE</span>
         </div>
         <div class="diagnostic">
-          <span class="label">GPIO12 Pulse</span>
+          <span class="label">GPIO12 Raw Pulse</span>
           <span id="headlightPulseValue">HEADLIGHT_PULSE</span>
+        </div>
+        <div class="diagnostic">
+          <span class="label">GPIO12 Filtered Pulse</span>
+          <span id="headlightFilteredPulseValue">HEADLIGHT_FILTERED_PULSE</span>
+        </div>
+        <div class="diagnostic">
+          <span class="label">GPIO12 Filter</span>
+          <span id="headlightFilterValue">HEADLIGHT_FILTER</span>
         </div>
         <div class="diagnostic">
           <span class="label">Pulse Age</span>
@@ -681,8 +713,16 @@ String htmlPage() {
           <span id="soundSwitchStatusValue">SOUND_SWITCH_STATUS</span>
         </div>
         <div class="diagnostic">
-          <span class="label">GPIO39 Pulse</span>
+          <span class="label">GPIO39 Raw Pulse</span>
           <span id="soundSwitchPulseValue">SOUND_SWITCH_PULSE</span>
+        </div>
+        <div class="diagnostic">
+          <span class="label">GPIO39 Filtered Pulse</span>
+          <span id="soundSwitchFilteredPulseValue">SOUND_SWITCH_FILTERED_PULSE</span>
+        </div>
+        <div class="diagnostic">
+          <span class="label">GPIO39 Filter</span>
+          <span id="soundSwitchFilterValue">SOUND_SWITCH_FILTER</span>
         </div>
         <div class="diagnostic">
           <span class="label">GPIO39 Pulse Age</span>
@@ -693,8 +733,16 @@ String htmlPage() {
           <span id="throttleStatusValue">THROTTLE_STATUS</span>
         </div>
         <div class="diagnostic">
-          <span class="label">GPIO33 Signal Pulse</span>
+          <span class="label">GPIO33 Raw Pulse</span>
+          <span id="throttleRawPulseValue">THROTTLE_RAW_PULSE</span>
+        </div>
+        <div class="diagnostic">
+          <span class="label">GPIO33 Filtered Pulse</span>
           <span id="throttlePulseValue">THROTTLE_PULSE</span>
+        </div>
+        <div class="diagnostic">
+          <span class="label">GPIO33 Filter</span>
+          <span id="throttleFilterValue">THROTTLE_FILTER</span>
         </div>
         <div class="diagnostic">
           <span class="label">Pulse / Command Age</span>
@@ -850,14 +898,22 @@ String htmlPage() {
     const turnSignalOutputValue = document.getElementById('turnSignalOutputValue');
     const turnSignalInputStatusValue = document.getElementById('turnSignalInputStatusValue');
     const turnSignalInputPulseValue = document.getElementById('turnSignalInputPulseValue');
+    const turnSignalFilteredPulseValue = document.getElementById('turnSignalFilteredPulseValue');
+    const turnSignalFilterValue = document.getElementById('turnSignalFilterValue');
     const headlightStateValue = document.getElementById('headlightStateValue');
     const headlightPulseValue = document.getElementById('headlightPulseValue');
+    const headlightFilteredPulseValue = document.getElementById('headlightFilteredPulseValue');
+    const headlightFilterValue = document.getElementById('headlightFilterValue');
     const headlightPulseAgeValue = document.getElementById('headlightPulseAgeValue');
     const soundSwitchStatusValue = document.getElementById('soundSwitchStatusValue');
     const soundSwitchPulseValue = document.getElementById('soundSwitchPulseValue');
+    const soundSwitchFilteredPulseValue = document.getElementById('soundSwitchFilteredPulseValue');
+    const soundSwitchFilterValue = document.getElementById('soundSwitchFilterValue');
     const soundSwitchPulseAgeValue = document.getElementById('soundSwitchPulseAgeValue');
     const throttleStatusValue = document.getElementById('throttleStatusValue');
     const throttlePulseValue = document.getElementById('throttlePulseValue');
+    const throttleRawPulseValue = document.getElementById('throttleRawPulseValue');
+    const throttleFilterValue = document.getElementById('throttleFilterValue');
     const throttlePulseAgeValue = document.getElementById('throttlePulseAgeValue');
     const calibrationStatusValue = document.getElementById('calibrationStatusValue');
     const centerUsValue = document.getElementById('centerUsValue');
@@ -999,14 +1055,22 @@ String htmlPage() {
       turnSignalOutputValue.textContent = state.turn_signal_output;
       turnSignalInputStatusValue.textContent = state.turn_signal_input_status;
       turnSignalInputPulseValue.textContent = state.turn_signal_input_pulse_us > 0 ? state.turn_signal_input_pulse_us + ' us' : '--';
+      turnSignalFilteredPulseValue.textContent = state.turn_signal_input_filtered_pulse_us > 0 ? state.turn_signal_input_filtered_pulse_us + ' us' : '--';
+      turnSignalFilterValue.textContent = state.turn_signal_input_filter_ready ? 'Ready' : 'Collecting';
       headlightStateValue.textContent = state.headlight_status;
       headlightPulseValue.textContent = state.headlight_pulse_us > 0 ? state.headlight_pulse_us + ' us' : '--';
+      headlightFilteredPulseValue.textContent = state.headlight_filtered_pulse_us > 0 ? state.headlight_filtered_pulse_us + ' us' : '--';
+      headlightFilterValue.textContent = state.headlight_filter_ready ? 'Ready' : 'Collecting';
       headlightPulseAgeValue.textContent = state.headlight_pulse_us > 0 ? state.headlight_pulse_age_ms + ' ms' : '--';
       soundSwitchStatusValue.textContent = state.sound_switch_status;
       soundSwitchPulseValue.textContent = state.sound_switch_pulse_us > 0 ? state.sound_switch_pulse_us + ' us' : '--';
+      soundSwitchFilteredPulseValue.textContent = state.sound_switch_filtered_pulse_us > 0 ? state.sound_switch_filtered_pulse_us + ' us' : '--';
+      soundSwitchFilterValue.textContent = state.sound_switch_filter_ready ? 'Ready' : 'Collecting';
       soundSwitchPulseAgeValue.textContent = state.sound_switch_pulse_us > 0 ? state.sound_switch_pulse_age_ms + ' ms' : '--';
       throttleStatusValue.textContent = state.throttle_status;
       throttlePulseValue.textContent = state.throttle_pulse_us > 0 ? state.throttle_pulse_us + ' us' : '--';
+      throttleRawPulseValue.textContent = state.throttle_raw_pulse_us > 0 ? state.throttle_raw_pulse_us + ' us' : '--';
+      throttleFilterValue.textContent = state.throttle_filter_ready ? 'Ready' : 'Collecting';
       throttlePulseAgeValue.textContent = state.throttle_pulse_us > 0 ? state.throttle_pulse_age_ms + ' ms' : '--';
       calibrationStatusValue.textContent = state.calibration_status;
       brightnessSlider.value = state.brightness;
@@ -1259,15 +1323,26 @@ String htmlPage() {
     "TURN_SIGNAL_INPUT_PULSE",
     turnSignalInputPulseValue == "--" ? turnSignalInputPulseValue : turnSignalInputPulseValue + " us"
   );
+  html.replace(
+    "TURN_SIGNAL_FILTERED_PULSE",
+    turnSignalFilteredPulseValue == "--" ? turnSignalFilteredPulseValue : turnSignalFilteredPulseValue + " us"
+  );
+  html.replace("TURN_SIGNAL_FILTER", turnSignalFilterValue);
   html.replace("HEADLIGHT_STATE", headlightStateValue);
   html.replace("HEADLIGHT_PULSE_AGE", headlightPulseAgeValue == "--" ? headlightPulseAgeValue : headlightPulseAgeValue + " ms");
   html.replace("HEADLIGHT_PULSE", headlightPulseValue == "--" ? headlightPulseValue : headlightPulseValue + " us");
+  html.replace("HEADLIGHT_FILTERED_PULSE", headlightFilteredPulseValue == "--" ? headlightFilteredPulseValue : headlightFilteredPulseValue + " us");
+  html.replace("HEADLIGHT_FILTER", headlightFilterValue);
   html.replace("SOUND_SWITCH_STATUS", soundSwitchStatusValue);
   html.replace("SOUND_SWITCH_PULSE_AGE", soundSwitchPulseAgeValue == "--" ? soundSwitchPulseAgeValue : soundSwitchPulseAgeValue + " ms");
   html.replace("SOUND_SWITCH_PULSE", soundSwitchPulseValue == "--" ? soundSwitchPulseValue : soundSwitchPulseValue + " us");
+  html.replace("SOUND_SWITCH_FILTERED_PULSE", soundSwitchFilteredPulseValue == "--" ? soundSwitchFilteredPulseValue : soundSwitchFilteredPulseValue + " us");
+  html.replace("SOUND_SWITCH_FILTER", soundSwitchFilterValue);
   html.replace("THROTTLE_STATUS", throttleStatusValue);
   html.replace("THROTTLE_PULSE_AGE", throttlePulseAgeValue == "--" ? throttlePulseAgeValue : throttlePulseAgeValue + " ms");
   html.replace("THROTTLE_PULSE", throttlePulseValue == "--" ? throttlePulseValue : throttlePulseValue + " us");
+  html.replace("THROTTLE_RAW_PULSE", throttleRawPulseValue == "--" ? throttleRawPulseValue : throttleRawPulseValue + " us");
+  html.replace("THROTTLE_FILTER", throttleFilterValue);
   return html;
 }
 
@@ -1713,7 +1788,21 @@ String stateJson() {
     json += "false";
   }
   json += ",\"turn_signal_input_pulse_us\":";
+  json += String(
+    vehicleControl.mode == VehicleControlMode::Receiver ?
+      steeringReceiverInput.pulseWidthUs :
+      vehicleControl.steeringPulseUs
+  );
+  json += ",\"turn_signal_input_filtered_pulse_us\":";
   json += String(vehicleControl.steeringPulseUs);
+  json += ",\"turn_signal_input_filter_ready\":";
+  if (vehicleControl.mode == VehicleControlMode::Receiver ?
+      steeringReceiverInput.filterReady :
+      vehicleControl.armed) {
+    json += "true";
+  } else {
+    json += "false";
+  }
   json += ",\"headlights_on\":";
   if (dashboardHeadlightsOn) {
     json += "true";
@@ -1731,6 +1820,14 @@ String stateJson() {
   }
   json += ",\"headlight_pulse_us\":";
   json += String(headlightInput.pulseWidthUs);
+  json += ",\"headlight_filtered_pulse_us\":";
+  json += String(headlightInput.filteredPulseWidthUs);
+  json += ",\"headlight_filter_ready\":";
+  if (headlightInput.filterReady) {
+    json += "true";
+  } else {
+    json += "false";
+  }
   json += ",\"headlight_pulse_age_ms\":";
   json += String(headlightInput.pulseAgeMs);
   json += ",\"sound_switch_status\":\"";
@@ -1750,6 +1847,14 @@ String stateJson() {
   }
   json += ",\"sound_switch_pulse_us\":";
   json += String(soundSwitchInput.pulseWidthUs);
+  json += ",\"sound_switch_filtered_pulse_us\":";
+  json += String(soundSwitchInput.filteredPulseWidthUs);
+  json += ",\"sound_switch_filter_ready\":";
+  if (soundSwitchInput.filterReady) {
+    json += "true";
+  } else {
+    json += "false";
+  }
   json += ",\"sound_switch_pulse_age_ms\":";
   json += String(soundSwitchInput.pulseAgeMs);
   json += ",\"horn_web_mode\":\"";
@@ -1789,6 +1894,20 @@ String stateJson() {
   }
   json += ",\"throttle_pulse_us\":";
   json += String(vehicleControl.throttlePulseUs);
+  json += ",\"throttle_raw_pulse_us\":";
+  json += String(
+    vehicleControl.mode == VehicleControlMode::Receiver ?
+      throttleReceiverInput.pulseWidthUs :
+      0
+  );
+  json += ",\"throttle_filter_ready\":";
+  if (vehicleControl.mode == VehicleControlMode::Receiver ?
+      throttleReceiverInput.filterReady :
+      vehicleControl.armed) {
+    json += "true";
+  } else {
+    json += "false";
+  }
   json += ",\"throttle_pulse_age_ms\":";
   json += String(
     vehicleControl.mode == VehicleControlMode::Receiver ?

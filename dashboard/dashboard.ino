@@ -65,6 +65,7 @@ static const int GEAR_PARK_INDEX = 0;
 static const int GEAR_REVERSE_INDEX = 1;
 static const int GEAR_NEUTRAL_INDEX = 2;
 static const int GEAR_DRIVE_INDEX = 3;
+static const uint8_t RC_PULSE_FILTER_SAMPLE_COUNT = 3;
 
 struct RcPulseInput {
   int pin;
@@ -79,6 +80,21 @@ struct RcPulseInput {
   volatile unsigned long isrPulseStartUs;
   volatile unsigned long isrLastPulseWidthUs;
   volatile unsigned long isrLastPulseAtUs;
+  volatile uint32_t isrPulseSequence;
+  uint32_t lastProcessedPulseSequence;
+  bool newPulseAvailable;
+  bool newValidPulse;
+  unsigned long lastValidPulseAtUs;
+  bool filterReady;
+  bool filteredPulseFresh;
+  unsigned long filteredPulseWidthUs;
+  unsigned long filteredPulseAgeMs;
+  unsigned long filterSamples[RC_PULSE_FILTER_SAMPLE_COUNT];
+  uint8_t filterSampleCount;
+  uint8_t filterNextSampleIndex;
+  bool debouncedState;
+  bool candidateState;
+  uint8_t candidateStateCount;
 };
 
 // ----------------------
@@ -371,6 +387,12 @@ void resetTiltReference();
 void initRcPulseInput(RcPulseInput &input);
 void IRAM_ATTR handleRcPulseInputChange(RcPulseInput &input);
 void updateRcPulseInput(RcPulseInput &input);
+void updateRcPulseMedianInput(RcPulseInput &input);
+void updateRcPulseDigitalInput(RcPulseInput &input, unsigned long onThresholdUs);
+void resetRcPulseFilter(RcPulseInput &input);
+void refreshRcPulseFilterFreshness(RcPulseInput &input, unsigned long nowUs);
+void recordRcPulseSample(RcPulseInput &input);
+unsigned long medianRcPulseSample(const RcPulseInput &input);
 void handleHeadlightInputChange();
 void updateHeadlightInput();
 String headlightInputStatusLabel();
@@ -743,9 +765,15 @@ void initRcPulseInput(RcPulseInput &input) {
   input.isrPulseStartUs = 0;
   input.isrLastPulseWidthUs = 0;
   input.isrLastPulseAtUs = 0;
+  input.isrPulseSequence = 0;
+  input.lastProcessedPulseSequence = 0;
   input.pulseFresh = false;
   input.pulseWidthUs = 0;
   input.pulseAgeMs = 0;
+  input.newPulseAvailable = false;
+  input.newValidPulse = false;
+  input.lastValidPulseAtUs = 0;
+  resetRcPulseFilter(input);
 }
 
 void IRAM_ATTR handleRcPulseInputChange(RcPulseInput &input) {
@@ -758,6 +786,8 @@ void IRAM_ATTR handleRcPulseInputChange(RcPulseInput &input) {
   } else if (input.isrPulseStartUs != 0) {
     input.isrLastPulseWidthUs = nowUs - input.isrPulseStartUs;
     input.isrLastPulseAtUs = nowUs;
+    input.isrPulseStartUs = 0;
+    input.isrPulseSequence++;
   }
 }
 
@@ -766,21 +796,141 @@ void updateRcPulseInput(RcPulseInput &input) {
   bool rawHigh = input.isrRawHigh;
   unsigned long pulseWidthUs = input.isrLastPulseWidthUs;
   unsigned long lastPulseAtUs = input.isrLastPulseAtUs;
+  uint32_t pulseSequence = input.isrPulseSequence;
   interrupts();
 
+  unsigned long nowUs = micros();
   bool pulseSeen = lastPulseAtUs != 0;
   unsigned long pulseAgeUs = pulseSeen ?
-    (micros() - lastPulseAtUs) :
+    (nowUs - lastPulseAtUs) :
     (input.staleUs + 1);
+  bool validPulse =
+    pulseSeen &&
+    pulseWidthUs >= input.minValidUs &&
+    pulseWidthUs <= input.maxValidUs;
+  bool sourceWasFresh =
+    input.lastValidPulseAtUs != 0 &&
+    (nowUs - input.lastValidPulseAtUs) <= input.staleUs;
 
   input.rawHigh = rawHigh;
   input.pulseWidthUs = pulseWidthUs;
   input.pulseAgeMs = pulseSeen ? (pulseAgeUs / 1000UL) : 0;
-  input.pulseFresh =
-    pulseSeen &&
-    pulseAgeUs <= input.staleUs &&
-    pulseWidthUs >= input.minValidUs &&
-    pulseWidthUs <= input.maxValidUs;
+  input.pulseFresh = validPulse && pulseAgeUs <= input.staleUs;
+  input.newPulseAvailable = pulseSequence != input.lastProcessedPulseSequence;
+  input.newValidPulse = input.newPulseAvailable && validPulse;
+
+  if (input.newPulseAvailable) {
+    input.lastProcessedPulseSequence = pulseSequence;
+  }
+
+  if (input.newValidPulse) {
+    if (!sourceWasFresh) {
+      resetRcPulseFilter(input);
+    }
+    input.lastValidPulseAtUs = lastPulseAtUs;
+  }
+
+  refreshRcPulseFilterFreshness(input, nowUs);
+}
+
+void resetRcPulseFilter(RcPulseInput &input) {
+  input.filterReady = false;
+  input.filteredPulseFresh = false;
+  input.filteredPulseWidthUs = 0;
+  input.filteredPulseAgeMs = 0;
+  input.filterSampleCount = 0;
+  input.filterNextSampleIndex = 0;
+  for (uint8_t i = 0; i < RC_PULSE_FILTER_SAMPLE_COUNT; ++i) {
+    input.filterSamples[i] = 0;
+  }
+  input.debouncedState = false;
+  input.candidateState = false;
+  input.candidateStateCount = 0;
+}
+
+void refreshRcPulseFilterFreshness(RcPulseInput &input, unsigned long nowUs) {
+  bool validSourceFresh =
+    input.lastValidPulseAtUs != 0 &&
+    (nowUs - input.lastValidPulseAtUs) <= input.staleUs;
+
+  if (!validSourceFresh) {
+    input.lastValidPulseAtUs = 0;
+    resetRcPulseFilter(input);
+    return;
+  }
+
+  input.filteredPulseAgeMs = (nowUs - input.lastValidPulseAtUs) / 1000UL;
+  input.filteredPulseFresh = input.filterReady;
+}
+
+void recordRcPulseSample(RcPulseInput &input) {
+  if (!input.newValidPulse) {
+    return;
+  }
+
+  input.filterSamples[input.filterNextSampleIndex] = input.pulseWidthUs;
+  input.filterNextSampleIndex =
+    (input.filterNextSampleIndex + 1) % RC_PULSE_FILTER_SAMPLE_COUNT;
+  if (input.filterSampleCount < RC_PULSE_FILTER_SAMPLE_COUNT) {
+    input.filterSampleCount++;
+  }
+
+  if (input.filterSampleCount == RC_PULSE_FILTER_SAMPLE_COUNT) {
+    input.filteredPulseWidthUs = medianRcPulseSample(input);
+    input.filterReady = true;
+  }
+}
+
+unsigned long medianRcPulseSample(const RcPulseInput &input) {
+  unsigned long first = input.filterSamples[0];
+  unsigned long second = input.filterSamples[1];
+  unsigned long third = input.filterSamples[2];
+
+  if (first > second) {
+    unsigned long swap = first;
+    first = second;
+    second = swap;
+  }
+  if (second > third) {
+    unsigned long swap = second;
+    second = third;
+    third = swap;
+  }
+  if (first > second) {
+    unsigned long swap = first;
+    first = second;
+    second = swap;
+  }
+
+  return second;
+}
+
+void updateRcPulseMedianInput(RcPulseInput &input) {
+  updateRcPulseInput(input);
+  recordRcPulseSample(input);
+  refreshRcPulseFilterFreshness(input, micros());
+}
+
+void updateRcPulseDigitalInput(RcPulseInput &input, unsigned long onThresholdUs) {
+  updateRcPulseInput(input);
+  recordRcPulseSample(input);
+
+  if (input.newValidPulse) {
+    bool candidateState = input.pulseWidthUs > onThresholdUs;
+    if (input.candidateStateCount == 0 ||
+        candidateState != input.candidateState) {
+      input.candidateState = candidateState;
+      input.candidateStateCount = 1;
+    } else if (input.candidateStateCount < RC_PULSE_FILTER_SAMPLE_COUNT) {
+      input.candidateStateCount++;
+    }
+
+    if (input.candidateStateCount >= RC_PULSE_FILTER_SAMPLE_COUNT) {
+      input.debouncedState = input.candidateState;
+    }
+  }
+
+  refreshRcPulseFilterFreshness(input, micros());
 }
 
 void IRAM_ATTR handleHeadlightInputChange() {
@@ -788,12 +938,9 @@ void IRAM_ATTR handleHeadlightInputChange() {
 }
 
 void updateHeadlightInput() {
-  updateRcPulseInput(headlightInput);
-  if (headlightInput.pulseFresh) {
-    dashboardHeadlightsOn = headlightInput.pulseWidthUs > HEADLIGHT_PULSE_ON_THRESHOLD_US;
-  } else {
-    dashboardHeadlightsOn = headlightInput.rawHigh;
-  }
+  updateRcPulseDigitalInput(headlightInput, HEADLIGHT_PULSE_ON_THRESHOLD_US);
+  dashboardHeadlightsOn =
+    headlightInput.filteredPulseFresh && headlightInput.debouncedState;
 }
 
 void IRAM_ATTR handleSoundSwitchInputChange() {
@@ -801,10 +948,9 @@ void IRAM_ATTR handleSoundSwitchInputChange() {
 }
 
 void updateSoundSwitchInput() {
-  updateRcPulseInput(soundSwitchInput);
+  updateRcPulseDigitalInput(soundSwitchInput, SOUND_SWITCH_PULSE_ON_THRESHOLD_US);
   soundSwitchOn =
-    soundSwitchInput.pulseFresh &&
-    soundSwitchInput.pulseWidthUs > SOUND_SWITCH_PULSE_ON_THRESHOLD_US;
+    soundSwitchInput.filteredPulseFresh && soundSwitchInput.debouncedState;
   rcHornRequested = soundSwitchOn;
 }
 
@@ -968,17 +1114,18 @@ void IRAM_ATTR handleThrottleReceiverInputChange() {
 void updateVehicleControlDashboard() {
   bool receiverMode = vehicleControl.mode == VehicleControlMode::Receiver;
   if (receiverMode) {
-    updateRcPulseInput(steeringReceiverInput);
-    updateRcPulseInput(throttleReceiverInput);
-    vehicleControl.steeringPulseUs = steeringReceiverInput.pulseFresh ?
-      steeringReceiverInput.pulseWidthUs : 0;
-    vehicleControl.throttlePulseUs = throttleReceiverInput.pulseFresh ?
-      throttleReceiverInput.pulseWidthUs : 0;
+    updateRcPulseMedianInput(steeringReceiverInput);
+    updateRcPulseMedianInput(throttleReceiverInput);
+    vehicleControl.steeringPulseUs = steeringReceiverInput.filteredPulseFresh ?
+      steeringReceiverInput.filteredPulseWidthUs : 0;
+    vehicleControl.throttlePulseUs = throttleReceiverInput.filteredPulseFresh ?
+      throttleReceiverInput.filteredPulseWidthUs : 0;
     vehicleControl.steeringPercent = 0;
     vehicleControl.throttlePercent = 0;
   }
 
-  bool steeringSignalAvailable = !receiverMode || steeringReceiverInput.pulseFresh;
+  bool steeringSignalAvailable =
+    !receiverMode || steeringReceiverInput.filteredPulseFresh;
   if (!steeringCalibrationValid() || !steeringSignalAvailable) {
     steeringInputValid = false;
     steeringWheelAngleDeg = 0;
@@ -994,7 +1141,7 @@ void updateVehicleControlDashboard() {
     updateTurnSignalIntent();
   }
 
-  if (receiverMode && !throttleReceiverInput.pulseFresh) {
+  if (receiverMode && !throttleReceiverInput.filteredPulseFresh) {
     dashboardRpmK = 0.0f;
     dashboardGearIndex = GEAR_NEUTRAL_INDEX;
     return;
@@ -1181,7 +1328,8 @@ const char *vehicleControlModeValue() {
 
 String vehicleControlStatusLabel() {
   if (vehicleControl.mode == VehicleControlMode::Receiver) {
-    return steeringReceiverInput.pulseFresh || throttleReceiverInput.pulseFresh ?
+    return steeringReceiverInput.filteredPulseFresh ||
+      throttleReceiverInput.filteredPulseFresh ?
       "Receiver active" :
       "Receiver waiting";
   }
@@ -1347,10 +1495,13 @@ String turnSignalOutputLabel() {
 }
 
 String headlightInputStatusLabel() {
-  if (headlightInput.pulseFresh) {
-    return dashboardHeadlightsOn ? "On pulse" : "Off pulse";
+  if (headlightInput.filteredPulseFresh) {
+    return dashboardHeadlightsOn ? "On filtered" : "Off filtered";
   }
-  return dashboardHeadlightsOn ? "High" : "Low";
+  if (headlightInput.pulseFresh) {
+    return "Filtering";
+  }
+  return "No valid pulse";
 }
 
 String headlightInputRawLabel() {
@@ -1358,22 +1509,31 @@ String headlightInputRawLabel() {
 }
 
 String soundSwitchInputStatusLabel() {
+  if (soundSwitchInput.filteredPulseFresh) {
+    return soundSwitchOn ? "On filtered" : "Off filtered";
+  }
   if (soundSwitchInput.pulseFresh) {
-    return soundSwitchOn ? "On pulse" : "Off pulse";
+    return "Filtering";
   }
   return "No pulse";
 }
 
 String turnSignalInputPulseStatusLabel() {
   if (vehicleControl.mode == VehicleControlMode::Receiver) {
-    return steeringReceiverInput.pulseFresh ? "Receiving" : "No receiver pulse";
+    if (steeringReceiverInput.filteredPulseFresh) {
+      return "Filtered";
+    }
+    return steeringReceiverInput.pulseFresh ? "Filtering" : "No receiver pulse";
   }
   return vehicleControl.armed ? "Web PWM armed" : "Web PWM idle";
 }
 
 String throttleInputStatusLabel() {
   if (vehicleControl.mode == VehicleControlMode::Receiver) {
-    return throttleReceiverInput.pulseFresh ? "Receiving" : "No receiver pulse";
+    if (throttleReceiverInput.filteredPulseFresh) {
+      return "Filtered";
+    }
+    return throttleReceiverInput.pulseFresh ? "Filtering" : "No receiver pulse";
   }
   return vehicleControlStatusLabel();
 }
