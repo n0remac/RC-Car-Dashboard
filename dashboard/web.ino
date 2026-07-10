@@ -63,8 +63,8 @@ String htmlPage() {
   String turnSignalValue = turnSignalLabel();
   String turnSignalOutputValue = turnSignalOutputLabel();
   String turnSignalInputStatusValue = turnSignalInputPulseStatusLabel();
-  String turnSignalInputPulseValue = turnSignalInput.pulseWidthUs > 0 ?
-    String(turnSignalInput.pulseWidthUs) :
+  String turnSignalInputPulseValue = vehicleControl.steeringPulseUs > 0 ?
+    String(vehicleControl.steeringPulseUs) :
     String("--");
   String headlightStateValue = headlightInputStatusLabel();
   String headlightPulseValue = headlightInput.pulseWidthUs > 0 ?
@@ -81,12 +81,12 @@ String htmlPage() {
     String(soundSwitchInput.pulseAgeMs) :
     String("--");
   String throttleStatusValue = throttleInputStatusLabel();
-  String throttlePulseValue = throttleInput.pulseWidthUs > 0 ?
-    String(throttleInput.pulseWidthUs) :
+  String throttlePulseValue = vehicleControl.throttlePulseUs > 0 ?
+    String(vehicleControl.throttlePulseUs) :
     String("--");
-  String throttlePulseAgeValue = throttleInput.pulseWidthUs > 0 ?
-    String(throttleInput.pulseAgeMs) :
-    String("--");
+  String throttlePulseAgeValue = vehicleControl.mode == VehicleControlMode::Receiver ?
+    (throttleReceiverInput.pulseFresh ? String(throttleReceiverInput.pulseAgeMs) : String("--")) :
+    (vehicleControl.armed ? String(vehicleControlHeartbeatAgeMs()) : String("--"));
   String steeringCenterValue = String(steeringCenterUs);
   String steeringLeftValue = String(steeringLeftUs);
   String steeringRightValue = String(steeringRightUs);
@@ -617,7 +617,7 @@ String htmlPage() {
       <div class="network-list" id="wifiNetworkList">No scan results yet.</div>
     </div>
 
-    <div class="subhead">Steering Input</div>
+    <div class="subhead">Vehicle Control</div>
     <div class="control-panel">
       <div class="steering-layout">
         <div class="wheel" id="steeringWheel">
@@ -641,11 +641,11 @@ String htmlPage() {
       </div>
       <div class="diagnostic-grid">
         <div class="diagnostic">
-          <span class="label">Input Status</span>
+          <span class="label">Control Status</span>
           <span id="steeringStatusValue">STEERING_STATUS</span>
         </div>
         <div class="diagnostic">
-          <span class="label">Valid Input</span>
+          <span class="label">Calibration Valid</span>
           <span id="steeringValidValue">STEERING_VALID</span>
         </div>
         <div class="diagnostic">
@@ -657,11 +657,11 @@ String htmlPage() {
           <span id="turnSignalOutputValue">TURN_SIGNAL_OUTPUT</span>
         </div>
         <div class="diagnostic">
-          <span class="label">GPIO32 Pulse Status</span>
+          <span class="label">GPIO32 Signal Status</span>
           <span id="turnSignalInputStatusValue">TURN_SIGNAL_INPUT_STATUS</span>
         </div>
         <div class="diagnostic">
-          <span class="label">GPIO32 Pulse</span>
+          <span class="label">GPIO32 Signal Pulse</span>
           <span id="turnSignalInputPulseValue">TURN_SIGNAL_INPUT_PULSE</span>
         </div>
         <div class="diagnostic">
@@ -689,15 +689,15 @@ String htmlPage() {
           <span id="soundSwitchPulseAgeValue">SOUND_SWITCH_PULSE_AGE</span>
         </div>
         <div class="diagnostic">
-          <span class="label">Throttle Status</span>
+          <span class="label">Throttle Control Status</span>
           <span id="throttleStatusValue">THROTTLE_STATUS</span>
         </div>
         <div class="diagnostic">
-          <span class="label">GPIO33 Pulse</span>
+          <span class="label">GPIO33 Signal Pulse</span>
           <span id="throttlePulseValue">THROTTLE_PULSE</span>
         </div>
         <div class="diagnostic">
-          <span class="label">GPIO33 Pulse Age</span>
+          <span class="label">Pulse / Command Age</span>
           <span id="throttlePulseAgeValue">THROTTLE_PULSE_AGE</span>
         </div>
         <div class="diagnostic">
@@ -726,11 +726,6 @@ String htmlPage() {
           step="1"
           value="TURN_THRESHOLD"
         >
-      </div>
-      <div class="calibration-actions">
-        <button class="secondary" type="button" data-calibrate="center">Set Center</button>
-        <button class="secondary" type="button" data-calibrate="left">Set Left</button>
-        <button class="secondary" type="button" data-calibrate="right">Set Right</button>
       </div>
       <div class="manual-grid">
         <label class="manual-field">
@@ -836,7 +831,8 @@ String htmlPage() {
 
     <div class="small">
       Connect to Wi-Fi network <strong>CarRadio</strong> and open
-      <a href="/">192.168.4.1</a>.
+      <a href="/">192.168.4.1</a>. Vehicle driving controls are available on
+      <a href="/controller">/controller</a>.
     </div>
   </div>
   <script>
@@ -870,7 +866,6 @@ String htmlPage() {
     const leftUsInput = document.getElementById('leftUsInput');
     const rightUsInput = document.getElementById('rightUsInput');
     const thresholdInput = document.getElementById('thresholdInput');
-    const calibrationButtons = document.querySelectorAll('[data-calibrate]');
     const wifiStatusValue = document.getElementById('wifiStatusValue');
     const wifiIpValue = document.getElementById('wifiIpValue');
     const wifiSsidValue = document.getElementById('wifiSsidValue');
@@ -950,13 +945,6 @@ String htmlPage() {
       params.set('right_us', rightUsInput.value);
       params.set('turn_threshold', thresholdInput.value);
       sendSetUpdate(params);
-    }
-
-    function sendCalibrationCapture(target) {
-      clearTimeout(submitTimer);
-      fetch('/set?calibrate=' + encodeURIComponent(target))
-        .then(() => pollSteeringState())
-        .catch(() => {});
     }
 
     function updateInputWhenIdle(input, value) {
@@ -1198,9 +1186,6 @@ String htmlPage() {
     leftUsInput.addEventListener('change', sendManualCalibrationUpdate);
     rightUsInput.addEventListener('change', sendManualCalibrationUpdate);
     thresholdInput.addEventListener('change', sendManualCalibrationUpdate);
-    calibrationButtons.forEach(button => {
-      button.addEventListener('click', () => sendCalibrationCapture(button.dataset.calibrate));
-    });
     wifiScanButton.addEventListener('click', scanWifiNetworks);
     wifiConnectButton.addEventListener('click', connectWifiNetwork);
     wifiDisconnectButton.addEventListener('click', disconnectWifiNetwork);
@@ -1290,6 +1275,396 @@ void handleRoot() {
   server.send(200, "text/html", htmlPage());
 }
 
+String controllerStateJson() {
+  String json = "{";
+  json += "\"armed\":";
+  json += vehicleControl.armed ? "true" : "false";
+  json += ",\"mode\":\"";
+  json += vehicleControlModeValue();
+  json += "\"";
+  json += ",\"status\":\"";
+  json += jsonEscape(vehicleControlStatusLabel());
+  json += "\"";
+  json += ",\"steering\":";
+  json += String(vehicleControl.steeringPercent);
+  json += ",\"throttle\":";
+  json += String(vehicleControl.throttlePercent);
+  json += ",\"steering_pulse_us\":";
+  json += String(vehicleControl.steeringPulseUs);
+  json += ",\"throttle_pulse_us\":";
+  json += String(vehicleControl.throttlePulseUs);
+  json += ",\"heartbeat_age_ms\":";
+  json += String(vehicleControlHeartbeatAgeMs());
+  json += ",\"watchdog_timeout_ms\":";
+  json += String(VEHICLE_CONTROL_WATCHDOG_MS);
+  json += ",\"calibration_valid\":";
+  json += steeringCalibrationValid() ? "true" : "false";
+  json += "}";
+  return json;
+}
+
+void sendControllerError(int code, const String &message) {
+  String json = "{\"error\":\"";
+  json += jsonEscape(message);
+  json += "\"}";
+  server.send(code, "application/json", json);
+}
+
+bool parseControllerPercent(const String &rawValue, int &percent) {
+  String value = rawValue;
+  value.trim();
+  if (value.length() == 0) {
+    return false;
+  }
+
+  int index = 0;
+  bool negative = false;
+  if (value.charAt(0) == '-') {
+    negative = true;
+    index = 1;
+  } else if (value.charAt(0) == '+') {
+    index = 1;
+  }
+
+  if (index >= value.length()) {
+    return false;
+  }
+
+  int parsed = 0;
+  for (; index < value.length(); index++) {
+    char character = value.charAt(index);
+    if (character < '0' || character > '9') {
+      return false;
+    }
+    parsed = (parsed * 10) + (character - '0');
+    if (parsed > 100) {
+      return false;
+    }
+  }
+
+  percent = negative ? -parsed : parsed;
+  return percent >= -100 && percent <= 100;
+}
+
+void handleControllerPage() {
+  server.send(200, "text/html", controllerPage());
+}
+
+void handleControllerState() {
+  server.send(200, "application/json", controllerStateJson());
+}
+
+void handleControllerArm() {
+  if (!armVehicleControl()) {
+    sendControllerError(409, "Web control could not be activated; check steering calibration and PWM setup");
+    return;
+  }
+
+  server.send(200, "application/json", controllerStateJson());
+}
+
+void handleControllerCommand() {
+  if (!vehicleControl.armed) {
+    sendControllerError(409, "Controller is not armed");
+    return;
+  }
+  if (!server.hasArg("steering") || !server.hasArg("throttle")) {
+    sendControllerError(400, "steering and throttle are required");
+    return;
+  }
+
+  int steeringPercent = 0;
+  int throttlePercent = 0;
+  if (!parseControllerPercent(server.arg("steering"), steeringPercent) ||
+      !parseControllerPercent(server.arg("throttle"), throttlePercent)) {
+    sendControllerError(400, "steering and throttle must be integers from -100 to 100");
+    return;
+  }
+
+  setVehicleControlCommand(steeringPercent, throttlePercent);
+  vehicleControl.lastHeartbeatMs = millis();
+  vehicleControl.watchdogStopped = false;
+  server.send(200, "application/json", controllerStateJson());
+}
+
+void handleControllerStop() {
+  stopVehicleControl(false);
+  server.send(200, "application/json", controllerStateJson());
+}
+
+String controllerPage() {
+  return R"HTML(
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Car Controller</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: Arial, sans-serif;
+      background: #080b10;
+      color: #f8fafc;
+      display: grid;
+      place-items: center;
+      padding: 18px;
+    }
+    main { width: min(100%, 520px); }
+    h1 { margin: 0; font-size: 1.7rem; }
+    .lede { margin: 8px 0 18px; color: #a9b4c3; line-height: 1.4; }
+    .panel {
+      background: #131923;
+      border: 1px solid #283445;
+      border-radius: 18px;
+      padding: 16px;
+      box-shadow: 0 18px 44px rgba(0, 0, 0, .35);
+    }
+    .status {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+    .metric {
+      background: #0b1119;
+      border: 1px solid #223043;
+      border-radius: 12px;
+      padding: 11px;
+      min-height: 66px;
+    }
+    .label { color: #92a0b3; display: block; font-size: .72rem; letter-spacing: .08em; text-transform: uppercase; }
+    .metric strong { display: block; margin-top: 5px; font-size: 1.05rem; }
+    button {
+      min-height: 52px;
+      border: 0;
+      border-radius: 12px;
+      padding: 12px 16px;
+      color: white;
+      background: #2563eb;
+      font-size: 1rem;
+      font-weight: 700;
+      touch-action: manipulation;
+    }
+    button:disabled { opacity: .45; }
+    #stopButton { background: #dc2626; }
+    .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 18px; }
+    .joystick-wrap { display: grid; justify-items: center; gap: 12px; }
+    #joystick {
+      width: min(78vw, 330px);
+      aspect-ratio: 1;
+      position: relative;
+      border-radius: 50%;
+      border: 2px solid #3c4d64;
+      background: radial-gradient(circle at 50% 50%, #1c293a 0 8%, #111924 9% 100%);
+      touch-action: none;
+      user-select: none;
+      opacity: .5;
+    }
+    #joystick::before, #joystick::after { content: ""; position: absolute; background: #314056; }
+    #joystick::before { height: 1px; left: 10%; right: 10%; top: 50%; }
+    #joystick::after { width: 1px; top: 10%; bottom: 10%; left: 50%; }
+    #joystick.armed { opacity: 1; }
+    #knob {
+      width: 30%;
+      aspect-ratio: 1;
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      border-radius: 50%;
+      transform: translate(-50%, -50%);
+      background: #38bdf8;
+      border: 4px solid #dbeafe;
+      box-shadow: 0 5px 16px rgba(0, 0, 0, .4);
+      pointer-events: none;
+    }
+    .directions { color: #9caabd; display: flex; justify-content: space-between; width: min(78vw, 330px); font-size: .82rem; }
+    .notice { min-height: 20px; margin: 16px 0 0; color: #c8d4e3; text-align: center; line-height: 1.35; }
+    .back { display: block; color: #7dd3fc; margin-top: 18px; text-align: center; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Car Controller</h1>
+    <p class="lede">Receiver input is the default. Activating web control makes the ESP32 drive these wires, so do not arm while the receiver is actively driving them.</p>
+    <section class="panel">
+      <div class="status">
+        <div class="metric"><span class="label">Controller</span><strong id="statusValue">Loading…</strong></div>
+        <div class="metric"><span class="label">Heartbeat</span><strong id="heartbeatValue">—</strong></div>
+        <div class="metric"><span class="label">Steering</span><strong id="steeringValue">0%</strong></div>
+        <div class="metric"><span class="label">Throttle</span><strong id="throttleValue">0%</strong></div>
+      </div>
+      <div class="actions">
+        <button id="armButton" type="button">Activate Web Control</button>
+        <button id="stopButton" type="button" disabled>Receiver Active</button>
+      </div>
+      <div class="joystick-wrap">
+        <div id="joystick" role="application" aria-label="Steering and throttle joystick"><div id="knob"></div></div>
+        <div class="directions"><span>Left</span><span>Forward ↑ / Reverse ↓</span><span>Right</span></div>
+      </div>
+      <p class="notice" id="noticeValue">Receiver control is active.</p>
+    </section>
+    <a class="back" href="/">Back to dashboard</a>
+  </main>
+  <script>
+    const armButton = document.getElementById('armButton');
+    const stopButton = document.getElementById('stopButton');
+    const joystick = document.getElementById('joystick');
+    const knob = document.getElementById('knob');
+    const statusValue = document.getElementById('statusValue');
+    const heartbeatValue = document.getElementById('heartbeatValue');
+    const steeringValue = document.getElementById('steeringValue');
+    const throttleValue = document.getElementById('throttleValue');
+    const noticeValue = document.getElementById('noticeValue');
+    let armed = false;
+    let steering = 0;
+    let throttle = 0;
+    let activePointer = null;
+    let commandInFlight = false;
+    let commandQueued = false;
+
+    function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
+    function setNotice(message) { noticeValue.textContent = message; }
+
+    function updateJoystick() {
+      knob.style.left = (50 + steering * 0.38) + '%';
+      knob.style.top = (50 - throttle * 0.38) + '%';
+      steeringValue.textContent = steering + '%';
+      throttleValue.textContent = throttle + '%';
+    }
+
+    function applyState(state) {
+      armed = Boolean(state.armed);
+      const webMode = state.mode === 'web';
+      joystick.classList.toggle('armed', armed);
+      armButton.disabled = armed || !state.calibration_valid;
+      armButton.textContent = armed ? 'Web Control Active' : 'Activate Web Control';
+      stopButton.disabled = !webMode;
+      stopButton.textContent = webMode ? 'Return to Receiver' : 'Receiver Active';
+      statusValue.textContent = state.status || (armed ? 'Armed' : 'Ready');
+      heartbeatValue.textContent = armed ? (state.heartbeat_age_ms + ' ms') : '—';
+      if (!armed) {
+        steering = 0;
+        throttle = 0;
+        updateJoystick();
+      }
+    }
+
+    async function request(path, options) {
+      const response = await fetch(path, options);
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Request failed');
+      return data;
+    }
+
+    async function armControl() {
+      try {
+        const state = await request('/controller/arm', { method: 'POST' });
+        applyState(state);
+        setNotice('Web output is active. Hold and drag the joystick to drive.');
+      } catch (error) {
+        setNotice(error.message || 'Unable to arm controller.');
+      }
+    }
+
+    function sendCommand() {
+      if (!armed) return;
+      if (commandInFlight) {
+        commandQueued = true;
+        return;
+      }
+      commandInFlight = true;
+      const params = new URLSearchParams({ steering: String(steering), throttle: String(throttle) });
+      request('/controller/command', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: params.toString()
+      }).then(applyState).catch(error => {
+        armed = false;
+        joystick.classList.remove('armed');
+        setNotice(error.message || 'Controller command failed.');
+      }).finally(() => {
+        commandInFlight = false;
+        if (commandQueued) {
+          commandQueued = false;
+          sendCommand();
+        }
+      });
+    }
+
+    async function stopControl() {
+      armed = false;
+      activePointer = null;
+      steering = 0;
+      throttle = 0;
+      updateJoystick();
+      try {
+        const state = await request('/controller/stop', { method: 'POST' });
+        applyState(state);
+        setNotice('Web output stopped. Receiver input is active.');
+      } catch (error) {
+        setNotice(error.message || 'Stop request failed.');
+      }
+    }
+
+    function updateFromPointer(event) {
+      const rect = joystick.getBoundingClientRect();
+      const radius = rect.width / 2;
+      const x = clamp((event.clientX - (rect.left + radius)) / (radius * 0.76), -1, 1);
+      const y = clamp((event.clientY - (rect.top + radius)) / (radius * 0.76), -1, 1);
+      steering = Math.round(x * 100);
+      throttle = Math.round(-y * 100);
+      updateJoystick();
+      sendCommand();
+    }
+
+    function releaseJoystick(event) {
+      if (activePointer !== null && event.pointerId !== activePointer) return;
+      activePointer = null;
+      steering = 0;
+      throttle = 0;
+      updateJoystick();
+      sendCommand();
+    }
+
+    joystick.addEventListener('pointerdown', event => {
+      if (!armed) {
+        setNotice('Arm Control before driving.');
+        return;
+      }
+      activePointer = event.pointerId;
+      joystick.setPointerCapture(event.pointerId);
+      updateFromPointer(event);
+    });
+    joystick.addEventListener('pointermove', event => {
+      if (event.pointerId === activePointer) updateFromPointer(event);
+    });
+    joystick.addEventListener('pointerup', releaseJoystick);
+    joystick.addEventListener('pointercancel', releaseJoystick);
+    armButton.addEventListener('click', armControl);
+    stopButton.addEventListener('click', stopControl);
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) stopControl();
+    });
+    window.addEventListener('pagehide', () => {
+      const body = new Blob([''], { type: 'application/x-www-form-urlencoded' });
+      navigator.sendBeacon('/controller/stop', body);
+    });
+    setInterval(sendCommand, 100);
+    setInterval(() => {
+      request('/controller/state').then(applyState).catch(() => {});
+    }, 250);
+    request('/controller/state').then(applyState).catch(() => setNotice('Controller state is unavailable.'));
+    updateJoystick();
+  </script>
+</body>
+</html>
+)HTML";
+}
+
 String stateJson() {
   String json = "{";
   json += "\"steering_angle\":";
@@ -1330,13 +1705,15 @@ String stateJson() {
   json += jsonEscape(turnSignalInputPulseStatusLabel());
   json += "\"";
   json += ",\"turn_signal_input_pulse_fresh\":";
-  if (turnSignalInput.pulseFresh) {
+  if (vehicleControl.mode == VehicleControlMode::Receiver ?
+      steeringReceiverInput.pulseFresh :
+      vehicleControl.armed) {
     json += "true";
   } else {
     json += "false";
   }
   json += ",\"turn_signal_input_pulse_us\":";
-  json += String(turnSignalInput.pulseWidthUs);
+  json += String(vehicleControl.steeringPulseUs);
   json += ",\"headlights_on\":";
   if (dashboardHeadlightsOn) {
     json += "true";
@@ -1403,15 +1780,21 @@ String stateJson() {
   json += jsonEscape(throttleInputStatusLabel());
   json += "\"";
   json += ",\"throttle_pulse_fresh\":";
-  if (throttleInput.pulseFresh) {
+  if (vehicleControl.mode == VehicleControlMode::Receiver ?
+      throttleReceiverInput.pulseFresh :
+      vehicleControl.armed) {
     json += "true";
   } else {
     json += "false";
   }
   json += ",\"throttle_pulse_us\":";
-  json += String(throttleInput.pulseWidthUs);
+  json += String(vehicleControl.throttlePulseUs);
   json += ",\"throttle_pulse_age_ms\":";
-  json += String(throttleInput.pulseAgeMs);
+  json += String(
+    vehicleControl.mode == VehicleControlMode::Receiver ?
+      throttleReceiverInput.pulseAgeMs :
+      vehicleControlHeartbeatAgeMs()
+  );
   json += ",\"brightness\":";
   json += String(screenBrightnessPercent);
   json += ",\"wifi_sta_status\":\"";
@@ -1547,7 +1930,6 @@ void handleSet() {
     server.hasArg("center_us") ||
     server.hasArg("left_us") ||
     server.hasArg("right_us") ||
-    server.hasArg("calibrate") ||
     server.hasArg("brightness")
   ) &&
     !server.hasArg("tilt_rotation") &&
@@ -1614,22 +1996,6 @@ void handleSet() {
 
   bool steeringSettingsChanged = false;
 
-  if (server.hasArg("calibrate")) {
-    String target = server.arg("calibrate");
-    unsigned long sampledUs = readSteeringPulseAverageUs(STEERING_CALIBRATION_SAMPLE_COUNT);
-
-    if (sampledUs > 0 && target == "center") {
-      steeringCenterUs = sampledUs;
-      steeringSettingsChanged = true;
-    } else if (sampledUs > 0 && target == "left") {
-      steeringLeftUs = sampledUs;
-      steeringSettingsChanged = true;
-    } else if (sampledUs > 0 && target == "right") {
-      steeringRightUs = sampledUs;
-      steeringSettingsChanged = true;
-    }
-  }
-
   if (server.hasArg("center_us")) {
     steeringCenterUs = clampInt(
       server.arg("center_us").toInt(),
@@ -1668,8 +2034,11 @@ void handleSet() {
 
   if (steeringSettingsChanged) {
     saveSteeringCalibration();
-    updateSteeringInput();
-    updateTurnSignalIntent();
+    if (!steeringCalibrationValid()) {
+      stopVehicleControl(false);
+    } else {
+      setVehicleControlCommand(vehicleControl.steeringPercent, vehicleControl.throttlePercent);
+    }
   }
 
   updateTurnSignalOutputs();

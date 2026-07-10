@@ -151,12 +151,10 @@ const unsigned long BLINK_INTERVAL_MS = 500;
 // ----------------------
 static const int STEERING_MIN_DEG = -45;
 static const int STEERING_MAX_DEG = 45;
-static const int STEERING_INPUT_PIN = 32;
+static const int STEERING_CONTROL_PIN = 32;
 static const unsigned long STEERING_DEFAULT_RIGHT_US = 1025UL;
 static const unsigned long STEERING_DEFAULT_CENTER_US = 1500UL;
 static const unsigned long STEERING_DEFAULT_LEFT_US = 2000UL;
-static const int STEERING_CALIBRATION_SAMPLE_COUNT = 5;
-static const float STEERING_SMOOTHING_ALPHA = 0.25f;
 static const unsigned long STEERING_PULSE_MIN_VALID_US = 900UL;
 static const unsigned long STEERING_PULSE_MAX_VALID_US = 2100UL;
 static const unsigned long STEERING_PULSE_STALE_US = 250000UL;
@@ -168,7 +166,6 @@ static const int RIGHT_TURN_LED_PIN = 25;
 static const bool TURN_LED_ACTIVE_LOW = true;
 
 int steeringWheelAngleDeg = 0;
-float smoothedSteeringAngleDeg = 0.0f;
 bool steeringInputValid = false;
 bool leftTurnSignalActive = false;
 bool rightTurnSignalActive = false;
@@ -176,8 +173,9 @@ unsigned long steeringCenterUs = STEERING_DEFAULT_CENTER_US;
 unsigned long steeringLeftUs = STEERING_DEFAULT_LEFT_US;
 unsigned long steeringRightUs = STEERING_DEFAULT_RIGHT_US;
 int turnSignalThresholdDeg = 15;
-RcPulseInput turnSignalInput = {
-  STEERING_INPUT_PIN,
+
+RcPulseInput steeringReceiverInput = {
+  STEERING_CONTROL_PIN,
   STEERING_PULSE_STALE_US,
   STEERING_PULSE_MIN_VALID_US,
   STEERING_PULSE_MAX_VALID_US,
@@ -192,9 +190,10 @@ RcPulseInput turnSignalInput = {
 };
 
 // ----------------------
-// Throttle input state
+// Vehicle control state. Receiver mode releases these GPIOs as inputs; web mode
+// drives PWM. Never enable web mode while an active receiver drives either wire.
 // ----------------------
-static const int THROTTLE_INPUT_PIN = 33;
+static const int THROTTLE_CONTROL_PIN = 33;
 static const unsigned long THROTTLE_PULSE_STALE_US = 250000UL;
 static const unsigned long THROTTLE_PULSE_MIN_VALID_US = 900UL;
 static const unsigned long THROTTLE_PULSE_MAX_VALID_US = 2100UL;
@@ -202,11 +201,16 @@ static const unsigned long THROTTLE_OFF_US = 1534UL;
 static const unsigned long THROTTLE_FULL_FORWARD_US = 979UL;
 static const unsigned long THROTTLE_FULL_REVERSE_US = 2045UL;
 static const unsigned long THROTTLE_NEUTRAL_TOLERANCE_US = 25UL;
-static const unsigned long THROTTLE_PARK_DELAY_MS = 10000UL;
 static const float THROTTLE_RPM_MAX_K = 8.0f;
+static const uint8_t STEERING_PWM_CHANNEL = 0;
+static const uint8_t THROTTLE_PWM_CHANNEL = 1;
+static const uint32_t VEHICLE_PWM_FREQUENCY_HZ = 50;
+static const uint8_t VEHICLE_PWM_RESOLUTION_BITS = 16;
+static const uint32_t VEHICLE_PWM_PERIOD_US = 1000000UL / VEHICLE_PWM_FREQUENCY_HZ;
+static const unsigned long VEHICLE_CONTROL_WATCHDOG_MS = 500UL;
 
-RcPulseInput throttleInput = {
-  THROTTLE_INPUT_PIN,
+RcPulseInput throttleReceiverInput = {
+  THROTTLE_CONTROL_PIN,
   THROTTLE_PULSE_STALE_US,
   THROTTLE_PULSE_MIN_VALID_US,
   THROTTLE_PULSE_MAX_VALID_US,
@@ -219,7 +223,35 @@ RcPulseInput throttleInput = {
   0,
   0
 };
-unsigned long throttleIdleStartedMs = 0;
+
+enum class VehicleControlMode : uint8_t {
+  Receiver,
+  Web
+};
+
+struct VehicleControlState {
+  VehicleControlMode mode;
+  bool pwmReady;
+  bool armed;
+  bool watchdogStopped;
+  int steeringPercent;
+  int throttlePercent;
+  unsigned long steeringPulseUs;
+  unsigned long throttlePulseUs;
+  unsigned long lastHeartbeatMs;
+};
+
+VehicleControlState vehicleControl = {
+  VehicleControlMode::Receiver,
+  false,
+  false,
+  false,
+  0,
+  0,
+  STEERING_DEFAULT_CENTER_US,
+  THROTTLE_OFF_US,
+  0
+};
 
 // ----------------------
 // Environment sensor data
@@ -336,7 +368,6 @@ String wifiStationStatusLabel();
 String wifiStationIpLabel();
 void applyTiltOrientation();
 void resetTiltReference();
-unsigned long readSteeringPulseAverageUs(int sampleCount);
 void initRcPulseInput(RcPulseInput &input);
 void IRAM_ATTR handleRcPulseInputChange(RcPulseInput &input);
 void updateRcPulseInput(RcPulseInput &input);
@@ -351,17 +382,28 @@ bool hornPlaybackRequested();
 const char *hornWebModeValue();
 String hornWebModeLabel();
 String soundSwitchInputStatusLabel();
-void handleThrottleInputChange();
-void updateThrottleInput();
+void initVehicleControl();
+void enableReceiverControl();
+bool enableWebControl();
+void releaseVehiclePwmOutputs();
+void handleSteeringReceiverInputChange();
+void handleThrottleReceiverInputChange();
+bool armVehicleControl();
+void stopVehicleControl(bool watchdogStop = false);
+void setVehicleControlCommand(int steeringPercent, int throttlePercent);
+void updateVehicleControlWatchdog();
+unsigned long vehicleControlHeartbeatAgeMs();
+const char *vehicleControlModeValue();
+String vehicleControlStatusLabel();
+unsigned long steeringPulseForPercent(int steeringPercent);
+unsigned long throttlePulseForPercent(int throttlePercent);
+void updateVehicleControlDashboard();
 String throttleInputStatusLabel();
-void handleTurnSignalInputChange();
-void updateTurnSignalPulseInput();
 String turnSignalInputPulseStatusLabel();
 void loadSteeringCalibration();
 void saveSteeringCalibration();
 bool steeringCalibrationValid();
 float mapSteeringPulseToAngle(unsigned long pulseWidthUs);
-void updateSteeringInput();
 void updateTurnSignalIntent();
 void updateTurnSignalOutputs();
 bool leftTurnSignalRequested();
@@ -372,6 +414,13 @@ String turnSignalLabel();
 String turnSignalOutputLabel();
 String steeringInputStatusLabel();
 String steeringCalibrationStatusLabel();
+String controllerPage();
+String controllerStateJson();
+void handleControllerPage();
+void handleControllerState();
+void handleControllerArm();
+void handleControllerCommand();
+void handleControllerStop();
 String bmeAddressLabel();
 String tiltOrientationName();
 String onOffLabel(bool enabled);
@@ -691,6 +740,12 @@ String wifiStationIpLabel() {
 void initRcPulseInput(RcPulseInput &input) {
   pinMode(input.pin, INPUT);
   input.isrRawHigh = digitalRead(input.pin) == HIGH;
+  input.isrPulseStartUs = 0;
+  input.isrLastPulseWidthUs = 0;
+  input.isrLastPulseAtUs = 0;
+  input.pulseFresh = false;
+  input.pulseWidthUs = 0;
+  input.pulseAgeMs = 0;
 }
 
 void IRAM_ATTR handleRcPulseInputChange(RcPulseInput &input) {
@@ -861,34 +916,91 @@ void sendHornResponse(int code, bool ok, const String &message) {
   server.send(code, "application/json", hornResponseJson(ok, message));
 }
 
-void IRAM_ATTR handleTurnSignalInputChange() {
-  handleRcPulseInputChange(turnSignalInput);
+uint32_t vehiclePwmDutyForPulse(unsigned long pulseUs) {
+  const uint32_t maxDuty = (1UL << VEHICLE_PWM_RESOLUTION_BITS) - 1UL;
+  return (uint32_t)(((uint64_t)pulseUs * maxDuty + (VEHICLE_PWM_PERIOD_US / 2UL)) /
+    VEHICLE_PWM_PERIOD_US);
 }
 
-void updateTurnSignalPulseInput() {
-  updateRcPulseInput(turnSignalInput);
+void writeVehiclePwmPulse(uint8_t channel, uint8_t pin, unsigned long pulseUs) {
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+  ledcWrite(pin, vehiclePwmDutyForPulse(pulseUs));
+#else
+  ledcWrite(channel, vehiclePwmDutyForPulse(pulseUs));
+#endif
 }
 
-void IRAM_ATTR handleThrottleInputChange() {
-  handleRcPulseInputChange(throttleInput);
+unsigned long steeringPulseForPercent(int steeringPercent) {
+  int clampedPercent = clampInt(steeringPercent, -100, 100);
+  if (!steeringCalibrationValid()) {
+    return STEERING_DEFAULT_CENTER_US;
+  }
+
+  if (clampedPercent < 0) {
+    unsigned long range = steeringLeftUs - steeringCenterUs;
+    return steeringCenterUs + ((range * (unsigned long)(-clampedPercent)) / 100UL);
+  }
+
+  unsigned long range = steeringCenterUs - steeringRightUs;
+  return steeringCenterUs - ((range * (unsigned long)clampedPercent) / 100UL);
 }
 
-void updateThrottleInput() {
-  updateRcPulseInput(throttleInput);
+unsigned long throttlePulseForPercent(int throttlePercent) {
+  int clampedPercent = clampInt(throttlePercent, -100, 100);
 
-  unsigned long now = millis();
-  if (!throttleInput.pulseFresh) {
+  if (clampedPercent > 0) {
+    unsigned long range = THROTTLE_OFF_US - THROTTLE_FULL_FORWARD_US;
+    return THROTTLE_OFF_US - ((range * (unsigned long)clampedPercent) / 100UL);
+  }
+
+  unsigned long range = THROTTLE_FULL_REVERSE_US - THROTTLE_OFF_US;
+  return THROTTLE_OFF_US + ((range * (unsigned long)(-clampedPercent)) / 100UL);
+}
+
+void IRAM_ATTR handleSteeringReceiverInputChange() {
+  handleRcPulseInputChange(steeringReceiverInput);
+}
+
+void IRAM_ATTR handleThrottleReceiverInputChange() {
+  handleRcPulseInputChange(throttleReceiverInput);
+}
+
+void updateVehicleControlDashboard() {
+  bool receiverMode = vehicleControl.mode == VehicleControlMode::Receiver;
+  if (receiverMode) {
+    updateRcPulseInput(steeringReceiverInput);
+    updateRcPulseInput(throttleReceiverInput);
+    vehicleControl.steeringPulseUs = steeringReceiverInput.pulseFresh ?
+      steeringReceiverInput.pulseWidthUs : 0;
+    vehicleControl.throttlePulseUs = throttleReceiverInput.pulseFresh ?
+      throttleReceiverInput.pulseWidthUs : 0;
+    vehicleControl.steeringPercent = 0;
+    vehicleControl.throttlePercent = 0;
+  }
+
+  bool steeringSignalAvailable = !receiverMode || steeringReceiverInput.pulseFresh;
+  if (!steeringCalibrationValid() || !steeringSignalAvailable) {
+    steeringInputValid = false;
+    steeringWheelAngleDeg = 0;
+    leftTurnSignalActive = false;
+    rightTurnSignalActive = false;
+  } else {
+    steeringInputValid = true;
+    steeringWheelAngleDeg = clampInt(
+      (int)round(mapSteeringPulseToAngle(vehicleControl.steeringPulseUs)),
+      STEERING_MIN_DEG,
+      STEERING_MAX_DEG
+    );
+    updateTurnSignalIntent();
+  }
+
+  if (receiverMode && !throttleReceiverInput.pulseFresh) {
     dashboardRpmK = 0.0f;
-    if (throttleIdleStartedMs == 0) {
-      throttleIdleStartedMs = now;
-    }
-    dashboardGearIndex = (now - throttleIdleStartedMs) >= THROTTLE_PARK_DELAY_MS ?
-      GEAR_PARK_INDEX :
-      GEAR_NEUTRAL_INDEX;
+    dashboardGearIndex = GEAR_NEUTRAL_INDEX;
     return;
   }
 
-  unsigned long pulseWidthUs = throttleInput.pulseWidthUs;
+  unsigned long pulseWidthUs = vehicleControl.throttlePulseUs;
   bool forwardActive = pulseWidthUs + THROTTLE_NEUTRAL_TOLERANCE_US < THROTTLE_OFF_US;
   bool reverseActive = pulseWidthUs > THROTTLE_OFF_US + THROTTLE_NEUTRAL_TOLERANCE_US;
 
@@ -897,7 +1009,6 @@ void updateThrottleInput() {
       (float)(THROTTLE_OFF_US - THROTTLE_FULL_FORWARD_US);
     dashboardRpmK = clamp01(forwardProgress) * THROTTLE_RPM_MAX_K;
     dashboardGearIndex = GEAR_DRIVE_INDEX;
-    throttleIdleStartedMs = 0;
     return;
   }
 
@@ -906,39 +1017,184 @@ void updateThrottleInput() {
       (float)(THROTTLE_FULL_REVERSE_US - THROTTLE_OFF_US);
     dashboardRpmK = clamp01(reverseProgress) * THROTTLE_RPM_MAX_K;
     dashboardGearIndex = GEAR_REVERSE_INDEX;
-    throttleIdleStartedMs = 0;
     return;
   }
 
   dashboardRpmK = 0.0f;
-  if (throttleIdleStartedMs == 0) {
-    throttleIdleStartedMs = now;
-  }
-  dashboardGearIndex = (now - throttleIdleStartedMs) >= THROTTLE_PARK_DELAY_MS ?
-    GEAR_PARK_INDEX :
-    GEAR_NEUTRAL_INDEX;
+  dashboardGearIndex = GEAR_NEUTRAL_INDEX;
 }
 
-unsigned long readSteeringPulseAverageUs(int sampleCount) {
-  if (sampleCount <= 0) {
-    sampleCount = 1;
+void releaseVehiclePwmOutputs() {
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+  ledcDetach(STEERING_CONTROL_PIN);
+  ledcDetach(THROTTLE_CONTROL_PIN);
+#else
+  ledcDetachPin(STEERING_CONTROL_PIN);
+  ledcDetachPin(THROTTLE_CONTROL_PIN);
+#endif
+  vehicleControl.pwmReady = false;
+}
+
+void enableReceiverControl() {
+  releaseVehiclePwmOutputs();
+  vehicleControl.mode = VehicleControlMode::Receiver;
+  vehicleControl.armed = false;
+  vehicleControl.lastHeartbeatMs = 0;
+  vehicleControl.steeringPercent = 0;
+  vehicleControl.throttlePercent = 0;
+
+  initRcPulseInput(steeringReceiverInput);
+  attachInterrupt(
+    digitalPinToInterrupt(STEERING_CONTROL_PIN),
+    handleSteeringReceiverInputChange,
+    CHANGE
+  );
+  initRcPulseInput(throttleReceiverInput);
+  attachInterrupt(
+    digitalPinToInterrupt(THROTTLE_CONTROL_PIN),
+    handleThrottleReceiverInputChange,
+    CHANGE
+  );
+  updateVehicleControlDashboard();
+}
+
+bool enableWebControl() {
+  detachInterrupt(digitalPinToInterrupt(STEERING_CONTROL_PIN));
+  detachInterrupt(digitalPinToInterrupt(THROTTLE_CONTROL_PIN));
+
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+  bool steeringAttached = ledcAttach(
+    STEERING_CONTROL_PIN,
+    VEHICLE_PWM_FREQUENCY_HZ,
+    VEHICLE_PWM_RESOLUTION_BITS
+  );
+  bool throttleAttached = ledcAttach(
+    THROTTLE_CONTROL_PIN,
+    VEHICLE_PWM_FREQUENCY_HZ,
+    VEHICLE_PWM_RESOLUTION_BITS
+  );
+  if (!steeringAttached || !throttleAttached) {
+#else
+  uint32_t steeringFrequency = ledcSetup(
+    STEERING_PWM_CHANNEL,
+    VEHICLE_PWM_FREQUENCY_HZ,
+    VEHICLE_PWM_RESOLUTION_BITS
+  );
+  uint32_t throttleFrequency = ledcSetup(
+    THROTTLE_PWM_CHANNEL,
+    VEHICLE_PWM_FREQUENCY_HZ,
+    VEHICLE_PWM_RESOLUTION_BITS
+  );
+  if (steeringFrequency == 0 || throttleFrequency == 0) {
+#endif
+    enableReceiverControl();
+    return false;
   }
 
-  unsigned long pulseTotalUs = 0;
-  int validSamples = 0;
-  for (int i = 0; i < sampleCount; i++) {
-    updateTurnSignalPulseInput();
-    if (turnSignalInput.pulseFresh) {
-      pulseTotalUs += turnSignalInput.pulseWidthUs;
-      validSamples++;
-    }
-    delay(20);
+#if ESP_ARDUINO_VERSION_MAJOR < 3
+  ledcAttachPin(STEERING_CONTROL_PIN, STEERING_PWM_CHANNEL);
+  ledcAttachPin(THROTTLE_CONTROL_PIN, THROTTLE_PWM_CHANNEL);
+#endif
+  vehicleControl.mode = VehicleControlMode::Web;
+  vehicleControl.pwmReady = true;
+  return true;
+}
+
+void setVehicleControlCommand(int steeringPercent, int throttlePercent) {
+  if (vehicleControl.mode != VehicleControlMode::Web) {
+    updateVehicleControlDashboard();
+    return;
   }
 
-  if (validSamples == 0) {
+  vehicleControl.steeringPercent = clampInt(steeringPercent, -100, 100);
+  vehicleControl.throttlePercent = clampInt(throttlePercent, -100, 100);
+  vehicleControl.steeringPulseUs = steeringPulseForPercent(vehicleControl.steeringPercent);
+  vehicleControl.throttlePulseUs = throttlePulseForPercent(vehicleControl.throttlePercent);
+
+  if (vehicleControl.pwmReady) {
+    writeVehiclePwmPulse(
+      STEERING_PWM_CHANNEL,
+      STEERING_CONTROL_PIN,
+      vehicleControl.steeringPulseUs
+    );
+    writeVehiclePwmPulse(
+      THROTTLE_PWM_CHANNEL,
+      THROTTLE_CONTROL_PIN,
+      vehicleControl.throttlePulseUs
+    );
+  }
+
+  updateVehicleControlDashboard();
+}
+
+void initVehicleControl() {
+  enableReceiverControl();
+}
+
+bool armVehicleControl() {
+  if (!steeringCalibrationValid()) {
+    return false;
+  }
+  if (vehicleControl.mode == VehicleControlMode::Receiver && !enableWebControl()) {
+    return false;
+  }
+  if (!vehicleControl.pwmReady) {
+    return false;
+  }
+
+  vehicleControl.armed = true;
+  vehicleControl.watchdogStopped = false;
+  setVehicleControlCommand(0, 0);
+  vehicleControl.lastHeartbeatMs = millis();
+  return true;
+}
+
+void stopVehicleControl(bool watchdogStop) {
+  if (vehicleControl.mode == VehicleControlMode::Web && vehicleControl.pwmReady) {
+    setVehicleControlCommand(0, 0);
+  }
+
+  enableReceiverControl();
+  vehicleControl.watchdogStopped = watchdogStop;
+}
+
+void updateVehicleControlWatchdog() {
+  if (!vehicleControl.armed || vehicleControl.lastHeartbeatMs == 0) {
+    return;
+  }
+
+  if ((millis() - vehicleControl.lastHeartbeatMs) > VEHICLE_CONTROL_WATCHDOG_MS) {
+    stopVehicleControl(true);
+  }
+}
+
+unsigned long vehicleControlHeartbeatAgeMs() {
+  if (!vehicleControl.armed || vehicleControl.lastHeartbeatMs == 0) {
     return 0;
   }
-  return pulseTotalUs / validSamples;
+  return millis() - vehicleControl.lastHeartbeatMs;
+}
+
+const char *vehicleControlModeValue() {
+  return vehicleControl.mode == VehicleControlMode::Web ? "web" : "receiver";
+}
+
+String vehicleControlStatusLabel() {
+  if (vehicleControl.mode == VehicleControlMode::Receiver) {
+    return steeringReceiverInput.pulseFresh || throttleReceiverInput.pulseFresh ?
+      "Receiver active" :
+      "Receiver waiting";
+  }
+  if (!vehicleControl.pwmReady) {
+    return "PWM unavailable";
+  }
+  if (!steeringCalibrationValid()) {
+    return "Calibration invalid";
+  }
+  if (vehicleControl.armed) {
+    return "Web control armed";
+  }
+  return "Web control ready";
 }
 
 void saveSteeringCalibration() {
@@ -996,28 +1252,6 @@ float mapSteeringPulseToAngle(unsigned long pulseWidthUs) {
   float progress = (float)(pulseWidthUs - steeringCenterUs) /
     (float)(steeringLeftUs - steeringCenterUs);
   return progress * STEERING_MIN_DEG;
-}
-
-void updateSteeringInput() {
-  if (!turnSignalInput.pulseFresh || !steeringCalibrationValid()) {
-    steeringInputValid = false;
-    steeringWheelAngleDeg = 0;
-    smoothedSteeringAngleDeg = 0.0f;
-    leftTurnSignalActive = false;
-    rightTurnSignalActive = false;
-    return;
-  }
-
-  steeringInputValid = true;
-  float targetAngle = mapSteeringPulseToAngle(turnSignalInput.pulseWidthUs);
-  smoothedSteeringAngleDeg +=
-    (targetAngle - smoothedSteeringAngleDeg) * STEERING_SMOOTHING_ALPHA;
-  steeringWheelAngleDeg = clampInt(
-    (int)round(smoothedSteeringAngleDeg),
-    STEERING_MIN_DEG,
-    STEERING_MAX_DEG
-  );
-  updateTurnSignalIntent();
 }
 
 void updateTurnSignalIntent() {
@@ -1131,27 +1365,21 @@ String soundSwitchInputStatusLabel() {
 }
 
 String turnSignalInputPulseStatusLabel() {
-  if (turnSignalInput.pulseFresh) {
-    return "Receiving";
+  if (vehicleControl.mode == VehicleControlMode::Receiver) {
+    return steeringReceiverInput.pulseFresh ? "Receiving" : "No receiver pulse";
   }
-  return "No pulse";
+  return vehicleControl.armed ? "Web PWM armed" : "Web PWM idle";
 }
 
 String throttleInputStatusLabel() {
-  if (throttleInput.pulseFresh) {
-    return "Receiving";
+  if (vehicleControl.mode == VehicleControlMode::Receiver) {
+    return throttleReceiverInput.pulseFresh ? "Receiving" : "No receiver pulse";
   }
-  return "No pulse";
+  return vehicleControlStatusLabel();
 }
 
 String steeringInputStatusLabel() {
-  if (!steeringCalibrationValid()) {
-    return "Calibration invalid";
-  }
-  if (steeringInputValid) {
-    return "Online";
-  }
-  return "No pulse";
+  return vehicleControlStatusLabel();
 }
 
 String steeringCalibrationStatusLabel() {
@@ -1192,24 +1420,19 @@ void setup() {
   pinMode(SCREEN_BACKLIGHT_PIN, OUTPUT);
   loadScreenBrightness();
   applyScreenBrightness();
-  initRcPulseInput(turnSignalInput);
-  attachInterrupt(digitalPinToInterrupt(STEERING_INPUT_PIN), handleTurnSignalInputChange, CHANGE);
   loadSteeringCalibration();
-  updateTurnSignalPulseInput();
+  initVehicleControl();
   initRcPulseInput(headlightInput);
   attachInterrupt(digitalPinToInterrupt(HEADLIGHT_INPUT_PIN), handleHeadlightInputChange, CHANGE);
   updateHeadlightInput();
   initRcPulseInput(soundSwitchInput);
   attachInterrupt(digitalPinToInterrupt(SOUND_SWITCH_INPUT_PIN), handleSoundSwitchInputChange, CHANGE);
   updateSoundSwitchInput();
-  initRcPulseInput(throttleInput);
-  attachInterrupt(digitalPinToInterrupt(THROTTLE_INPUT_PIN), handleThrottleInputChange, CHANGE);
-  updateThrottleInput();
   pinMode(LEFT_TURN_LED_PIN, OUTPUT);
   pinMode(RIGHT_TURN_LED_PIN, OUTPUT);
   writeTurnSignalLed(LEFT_TURN_LED_PIN, false);
   writeTurnSignalLed(RIGHT_TURN_LED_PIN, false);
-  updateSteeringInput();
+  updateVehicleControlDashboard();
   updateTurnSignalOutputs();
 
   Serial.begin(115200);
@@ -1256,6 +1479,11 @@ void setup() {
   server.on("/", handleRoot);
   server.on("/state", handleState);
   server.on("/set", handleSet);
+  server.on("/controller", HTTP_GET, handleControllerPage);
+  server.on("/controller/state", HTTP_GET, handleControllerState);
+  server.on("/controller/arm", HTTP_POST, handleControllerArm);
+  server.on("/controller/command", HTTP_POST, handleControllerCommand);
+  server.on("/controller/stop", HTTP_POST, handleControllerStop);
   server.on("/wifi/scan", HTTP_GET, handleWifiScan);
   server.on("/wifi/connect", HTTP_POST, handleWifiConnect);
   server.on("/wifi/disconnect", HTTP_POST, handleWifiDisconnect);
@@ -1271,9 +1499,10 @@ void loop() {
   updateHeadlightInput();
   updateSoundSwitchInput();
   updateHornPlayback();
-  updateTurnSignalPulseInput();
-  updateThrottleInput();
-  updateSteeringInput();
+  updateVehicleControlWatchdog();
+  if (vehicleControl.mode == VehicleControlMode::Receiver) {
+    updateVehicleControlDashboard();
+  }
   updateTurnSignalOutputs();
   server.handleClient();
   if (!hornSynthIsActive()) {
