@@ -8,7 +8,7 @@ CarDashboard is a single ESP32 firmware image. Arduino combines every `.ino` tab
 RC PWM inputs ──interrupt/filter──┐
 GPS UART ───────TinyGPS++─────────┤
 IMU + BME280 ───I2C───────────────┼── shared firmware state ── TFT renderer
-                                  │                         └── GET /state JSON
+                                  │                         └── `/api/v1` JSON + SSE
 Browser controller ──HTTP POST────┴── mode switch ── LEDC PWM ── steering/throttle
 Browser WAV ──HTTP upload──LittleFS──I2S ── amplifier/speaker
 RC/web horn request ──synth task─────I2S ── amplifier/speaker
@@ -45,9 +45,9 @@ The TFT pins are supplied by the installed `TFT_eSPI` board configuration and ar
 4. Starts serial, TFT/sprite rendering, LittleFS audio storage, and the horn task.
 5. Starts the `CarRadio` access point and optionally reconnects saved station Wi-Fi.
 6. Starts I2C, probes the LSM6DSOX and BME280 (addresses `0x76`, then `0x77`), and starts GPS UART1.
-7. Registers HTTP routes, starts the server, and renders the screen.
+7. Registers asynchronous HTTP/SSE routes, starts the server, and renders the screen.
 
-The cooperative `loop()` updates pulse inputs, horn requests, the control watchdog, receiver-derived dashboard state, turn outputs, HTTP clients, audio, GPS, IMU, speed fusion, one-second environment samples, 500 ms blinking, and 50 ms TFT rendering. A 2 ms delay is used when audio is idle.
+The cooperative `loop()` updates pulse inputs, horn requests, the control watchdog, receiver-derived dashboard state, turn outputs, 4 Hz SSE publication, audio, GPS, IMU, speed fusion, one-second environment samples, 500 ms blinking, and 50 ms TFT rendering. HTTP request processing runs asynchronously. A 2 ms delay is used when audio is idle.
 
 ## Sensor and input acquisition
 
@@ -60,13 +60,13 @@ A pulse is usable only when it is within that input's configured range and newer
 | Input | Valid range | Stale after | Interpretation |
 |---|---:|---:|---|
 | Steering GPIO 32 | 900–2100 µs | 250 ms | Median pulse maps through stored right/center/left calibration to -45°…45° |
-| Throttle GPIO 33 | 900–2100 µs | 250 ms | Around 1534 µs is neutral; lower is drive, higher is reverse |
+| Throttle GPIO 33 | 900–2100 µs | 250 ms | Around 1534 µs is neutral; sustained lower pulses select drive and sustained higher pulses select reverse |
 | Headlight GPIO 12 | 750–2500 µs | 250 ms | On above 2000 µs after debounce |
 | Sound GPIO 39 | 750–2500 µs | 250 ms | Horn request above 2000 µs after debounce |
 
 Steering angle supplies the dashboard wheel display and automatic turn intent. The configured threshold defaults to 15°; a 3° release margin provides hysteresis. GPIO 26/25 outputs blink at 500 ms intervals.
 
-Throttle is also converted into display-only RPM (up to 8,000 RPM) and Drive/Reverse/Neutral gear state. This is inferred command position, not measured motor RPM.
+Throttle is also converted into display-only RPM (up to 8,000 RPM) and Park/Reverse/Neutral/Drive gear state. Receiver gear changes require three consecutive filtered pulse classifications. Drive is entered below 1484 µs and Reverse above 1609 µs; once selected, a direction is held until the pulse returns within 25 µs of the 1534 µs center. Centered throttle displays Neutral for 500 ms before settling into Park. A stale receiver signal displays Neutral and resets the pending gear and Park timers. Web control uses its explicit signed throttle command immediately but applies the same Neutral-to-Park delay at zero. This is inferred command position, not measured motor RPM or a physical transmission state.
 
 ### IMU and environment
 
@@ -90,7 +90,7 @@ GPIO 32 and 33 are inputs. `CHANGE` interrupts measure the external receiver's s
 
 ### Arming web mode
 
-`POST /controller/arm` calls `armVehicleControl()`:
+`POST /api/v1/control/arm` authenticates the client and calls `armVehicleControl()`:
 
 - Steering calibration must satisfy `right < center < left`.
 - Receiver interrupts are detached before output is enabled.
@@ -111,13 +111,13 @@ vertical: reverse -100 <── 0 ──> +100 forward
 It sends:
 
 ```http
-POST /controller/command
-Content-Type: application/x-www-form-urlencoded
+POST /api/v1/control/command
+Content-Type: application/json
 
-steering=-25&throttle=40
+{"session_id":"a1b2c3d4e5f60708","sequence":1,"steering":-25,"throttle":40}
 ```
 
-Both fields are mandatory strict integers in `[-100, 100]`. The handler rejects commands unless armed, updates the heartbeat only after parsing succeeds, maps percentages to pulses, writes LEDC duty, updates dashboard state, and returns controller JSON.
+The session must match the latest arm response, sequence numbers must strictly increase, and both control values must be integers in `[-100, 100]`. Rejected session/sequence requests do not refresh the watchdog or touch PWM.
 
 Steering uses the saved calibration:
 
@@ -136,7 +136,7 @@ Pulses are emitted at 50 Hz with 16-bit duty resolution. The browser sends on po
 ### Stops and failure behavior
 
 - Pointer release sends zero steering and throttle but remains armed.
-- The Stop button calls `POST /controller/stop` and restores receiver inputs.
+- The Stop button calls public `POST /api/v1/control/stop` and restores receiver inputs.
 - `visibilitychange` calls stop when the page becomes hidden.
 - `pagehide` uses `navigator.sendBeacon()` to request stop.
 - If the firmware receives no command for 500 ms, its independent watchdog writes neutral and restores receiver mode.
@@ -146,7 +146,7 @@ These are useful safeguards, not a substitute for a hardware emergency stop. Wi-
 
 ### Controller state response
 
-`GET /controller/state` and successful control POSTs return:
+`GET /api/v1/control/state` and successful control POSTs return control state including `session_id` and `last_sequence`.
 
 ```json
 {
@@ -168,13 +168,15 @@ These are useful safeguards, not a substitute for a hardware emergency stop. Wi-
 | Method | Route | Purpose |
 |---|---|---|
 | GET | `/` | Full dashboard, configuration, audio, and Wi-Fi UI |
-| GET | `/state` | Comprehensive sensor, input, audio, Wi-Fi, and setting JSON |
-| POST | `/set` | Update dashboard and calibration settings |
+| GET | `/api/v1/state` | Canonical aggregate state |
+| GET | `/api/v1/sensors`, `/api/v1/inputs` | Focused telemetry resources |
+| GET | `/api/v1/events` | One-client SSE stream at 4 Hz |
+| POST | `/api/v1/settings` | Atomically update JSON settings |
 | GET | `/controller` | Dedicated driving controller UI |
-| GET | `/controller/state` | Compact driving state JSON |
-| POST | `/controller/arm` | Switch shared wires to PWM outputs and arm |
-| POST | `/controller/command` | Apply form-encoded steering/throttle command |
-| POST | `/controller/stop` | Neutralize, detach PWM, and restore receiver mode |
+| GET | `/api/v1/control/state` | Compact driving state JSON |
+| POST | `/api/v1/control/arm` | Authenticate, switch outputs, and create a session |
+| POST | `/api/v1/control/command` | Apply ordered JSON steering/throttle command |
+| POST | `/api/v1/control/stop` | Public neutralize/receiver safety route |
 | GET | `/wifi/scan` | Scan nearby networks |
 | POST | `/wifi/connect` | Save credentials and begin station connection |
 | POST | `/wifi/disconnect` | Clear station credentials/disconnect |
@@ -182,7 +184,7 @@ These are useful safeguards, not a substitute for a hardware emergency stop. Wi-
 | POST | `/audio/horn` | Select horn override (`off`, `rc`, or `on`) |
 | POST | `/audio/horn/short` | Trigger a 220 ms horn |
 
-The `/state` endpoint is manually assembled JSON. The root page initially substitutes current values into HTML, then polls `/state` every second. Setting changes use form-encoded `POST /set`; successful AJAX-like calls receive 204, while normal form submissions redirect to `/`.
+The complete machine-readable contract is [docs/openapi.yaml](docs/openapi.yaml). Legacy routes remain as deprecated adapters.
 
 ## Audio subsystem
 
@@ -206,11 +208,12 @@ ESP32 Preferences stores:
 - dashboard brightness and tilt-related settings
 - station Wi-Fi SSID and password
 
-At boot, the device always creates the WPA2 access point `CarRadio` / `carradio123` and also uses station mode when credentials exist (`WIFI_AP_STA`). The AP normally appears at `192.168.4.1`. All HTTP traffic is plaintext and endpoints have no application-layer authorization; anyone on an admitted network can inspect state and attempt control requests.
+At boot, the device always creates the WPA2 access point `CarRadio` / `carradio123` and also uses station mode when credentials exist (`WIFI_AP_STA`). The AP normally appears at `192.168.4.1`. Browser and API requests connect directly without a pairing token. Traffic is unauthenticated plaintext and must remain on the WPA2-protected access point or another trusted local network; it must not be exposed directly to the internet.
 
 ## File responsibilities
 
 - `dashboard/dashboard.ino`: includes, constants, shared structs/state, generic RC pulse acquisition, sensor setup/update, control mode switching, PWM output, Preferences, Wi-Fi startup, routes, and `setup()`/`loop()`.
+- `dashboard/api.ino`: authentication, canonical serializers, JSON handlers, legacy route registration, control sessions, and SSE publication.
 - `dashboard/web.ino`: main and controller HTML/CSS/JavaScript, JSON serialization, setting/Wi-Fi handlers, and all controller HTTP handlers.
 - `dashboard/gps.ino`: TinyGPS++ UART parsing, labels, and GPS/IMU speed fusion.
 - `dashboard/panels.ino`: TFT gauge, environment, and warning panel drawing.
@@ -222,10 +225,11 @@ At boot, the device always creates the WPA2 access point `CarRadio` / `carradio1
 
 ## Development notes
 
+- Build with a partition that provides more than 1.4 MB for the application while retaining a filesystem; the verified generic ESP32 configuration is `PartitionScheme=huge_app`.
 - Keep ISR work minimal. Pulse interpretation, filtering, strings, HTTP, and rendering belong in loop/task context.
 - When changing control pins, update the I2S conflict checks and the hardware table together.
 - Preserve the sequence “detach input interrupt, then attach PWM” and the reverse sequence on stop to avoid measuring the firmware's own output or driving during input mode.
-- Any change to controller cadence must remain comfortably below the 500 ms watchdog timeout, including realistic Wi-Fi and synchronous-server latency.
+- Any change to controller cadence must remain comfortably below the 500 ms watchdog timeout, including realistic Wi-Fi latency.
 - Treat pulse calibration changes as control changes: web mode immediately recomputes the active command after valid calibration updates.
 - Large embedded HTML and manually concatenated JSON consume heap. Watch free memory if adding UI/state fields.
 - Utility sketches should be compiled separately and should not be copied into `dashboard/` unless intended to become part of the production translation unit.
@@ -233,11 +237,10 @@ At boot, the device always creates the WPA2 access point `CarRadio` / `carradio1
 ## Suggested validation checklist
 
 1. Compile for both the intended ESP32 Arduino core and configured TFT target.
-2. With actuators disconnected, verify pulse input widths and stale/filter transitions in `/state`.
+2. With actuators disconnected, verify pulse input widths and stale/filter transitions in `/api/v1/state`.
 3. Confirm steering calibration ordering and endpoints before arming.
 4. Scope GPIO 32/33 to confirm 50 Hz neutral and endpoint pulse widths.
 5. Arm, then disable Wi-Fi and confirm receiver mode returns within approximately 500 ms.
 6. Test pointer release, tab hiding, page navigation, and Stop independently.
 7. Verify no external receiver drives GPIO 32/33 during web mode.
 8. Exercise missing GPS/IMU/BME280 and unavailable LittleFS/I2S cases.
-

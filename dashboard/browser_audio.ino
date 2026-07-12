@@ -528,14 +528,15 @@ String browserAudioResponseJson(bool ok, const String &message) {
   return json;
 }
 
-void sendBrowserAudioResponse(int code, bool ok, const String &message) {
-  server.send(code, "application/json", browserAudioResponseJson(ok, message));
-}
-
-void handleBrowserAudioUpload() {
-  HTTPUpload &upload = server.upload();
-
-  if (upload.status == UPLOAD_FILE_START) {
+void handleBrowserAudioUpload(
+  AsyncWebServerRequest *request,
+  String filename,
+  size_t index,
+  uint8_t *data,
+  size_t length,
+  bool final
+) {
+  if (index == 0) {
     if (hornSynthIsActive()) {
       failBrowserAudioUpload("Wait for horn to stop before uploading");
       return;
@@ -557,7 +558,6 @@ void handleBrowserAudioUpload() {
       return;
     }
 
-    String filename = upload.filename;
     filename.toLowerCase();
     if (!filename.endsWith(".wav")) {
       failBrowserAudioUpload("Choose a .wav file");
@@ -576,23 +576,27 @@ void handleBrowserAudioUpload() {
       failBrowserAudioUpload("Could not open upload file");
       return;
     }
-  } else if (upload.status == UPLOAD_FILE_WRITE) {
+  }
+
+  if (length > 0) {
     if (browserAudioUploadFailed) {
       return;
     }
 
-    if ((browserAudioUploadBytes + upload.currentSize) > browserAudioUploadLimit) {
+    if ((browserAudioUploadBytes + length) > browserAudioUploadLimit) {
       failBrowserAudioUpload("Upload exceeds free audio storage");
       return;
     }
 
-    size_t written = browserAudioUploadFile.write(upload.buf, upload.currentSize);
+    size_t written = browserAudioUploadFile.write(data, length);
     browserAudioUploadBytes += written;
-    if (written != upload.currentSize) {
+    if (written != length) {
       failBrowserAudioUpload("Could not write uploaded data");
       return;
     }
-  } else if (upload.status == UPLOAD_FILE_END) {
+  }
+
+  if (final) {
     if (browserAudioUploadFailed) {
       return;
     }
@@ -601,7 +605,7 @@ void handleBrowserAudioUpload() {
       browserAudioUploadFile.close();
     }
 
-    if (browserAudioUploadBytes == 0 || upload.totalSize == 0) {
+    if (browserAudioUploadBytes == 0) {
       failBrowserAudioUpload("Uploaded file is empty");
       return;
     }
@@ -625,21 +629,20 @@ void handleBrowserAudioUpload() {
     browserAudioUploadMessage = "Upload saved";
     browserAudioStatus = "Ready";
     refreshBrowserAudioFileState();
-  } else if (upload.status == UPLOAD_FILE_ABORTED) {
-    failBrowserAudioUpload("Upload aborted");
   }
 }
 
-void handleBrowserAudioUploadComplete() {
-  if (!browserAudioUploadFinished) {
-    sendBrowserAudioResponse(400, false, "No upload received");
-    return;
-  }
-
+void handleBrowserAudioUploadComplete(AsyncWebServerRequest *request) {
   if (browserAudioUploadFailed) {
-    sendBrowserAudioResponse(400, false, browserAudioUploadMessage);
+    int code = browserAudioUploadMessage == "Storage unavailable" ? 503 : 400;
+    request->send(code, "application/json", browserAudioResponseJson(false, browserAudioUploadMessage));
     return;
   }
 
-  sendBrowserAudioResponse(200, true, browserAudioUploadMessage);
+  if (!browserAudioUploadFinished) {
+    request->send(400, "application/json", browserAudioResponseJson(false, "No upload received"));
+    return;
+  }
+
+  request->send(200, "application/json", browserAudioResponseJson(true, browserAudioUploadMessage));
 }

@@ -1,6 +1,8 @@
 #include <FS.h>
 #include <WiFi.h>
-#include <WebServer.h>
+#include <AsyncTCP.h>
+#include <ESPAsyncWebServer.h>
+#include <ArduinoJson.h>
 #include <TFT_eSPI.h>
 #include <SPI.h>
 #include <Wire.h>
@@ -8,11 +10,13 @@
 #include <Adafruit_Sensor.h>
 #include <Arduino_LSM6DSOX.h>
 #include <Preferences.h>
+#include <functional>
 #include <math.h>
 
 TFT_eSPI tft = TFT_eSPI();
 TFT_eSprite spr = TFT_eSprite(&tft);
-WebServer server(80);
+AsyncWebServer server(80);
+AsyncEventSource apiEvents("/api/v1/events");
 Preferences steeringPreferences;
 Preferences dashboardPreferences;
 Preferences wifiPreferences;
@@ -216,7 +220,11 @@ static const unsigned long THROTTLE_PULSE_MAX_VALID_US = 2100UL;
 static const unsigned long THROTTLE_OFF_US = 1534UL;
 static const unsigned long THROTTLE_FULL_FORWARD_US = 979UL;
 static const unsigned long THROTTLE_FULL_REVERSE_US = 2045UL;
-static const unsigned long THROTTLE_NEUTRAL_TOLERANCE_US = 25UL;
+static const unsigned long THROTTLE_DRIVE_ENTRY_TOLERANCE_US = 50UL;
+static const unsigned long THROTTLE_REVERSE_ENTRY_TOLERANCE_US = 75UL;
+static const unsigned long THROTTLE_DIRECTION_RELEASE_TOLERANCE_US = 25UL;
+static const uint8_t THROTTLE_GEAR_DEBOUNCE_SAMPLE_COUNT = 3;
+static const unsigned long THROTTLE_PARK_DELAY_MS = 500UL;
 static const float THROTTLE_RPM_MAX_K = 8.0f;
 static const uint8_t STEERING_PWM_CHANNEL = 0;
 static const uint8_t THROTTLE_PWM_CHANNEL = 1;
@@ -224,6 +232,30 @@ static const uint32_t VEHICLE_PWM_FREQUENCY_HZ = 50;
 static const uint8_t VEHICLE_PWM_RESOLUTION_BITS = 16;
 static const uint32_t VEHICLE_PWM_PERIOD_US = 1000000UL / VEHICLE_PWM_FREQUENCY_HZ;
 static const unsigned long VEHICLE_CONTROL_WATCHDOG_MS = 500UL;
+
+enum class ThrottleGearDirection : uint8_t {
+  Neutral,
+  Reverse,
+  Drive
+};
+
+struct ThrottleGearState {
+  ThrottleGearDirection committedDirection;
+  ThrottleGearDirection candidateDirection;
+  uint8_t candidateCount;
+  bool initialized;
+  bool centeredTimerActive;
+  unsigned long centeredSinceMs;
+};
+
+ThrottleGearState throttleGearState = {
+  ThrottleGearDirection::Neutral,
+  ThrottleGearDirection::Neutral,
+  0,
+  false,
+  false,
+  0
+};
 
 RcPulseInput throttleReceiverInput = {
   THROTTLE_CONTROL_PIN,
@@ -268,6 +300,10 @@ VehicleControlState vehicleControl = {
   THROTTLE_OFF_US,
   0
 };
+
+String apiControlSessionId = "";
+uint32_t apiControlLastSequence = 0;
+bool apiControlSequenceSeen = false;
 
 // ----------------------
 // Environment sensor data
@@ -318,12 +354,12 @@ const unsigned long TILT_RENDER_INTERVAL_MS = 50;
 // ----------------------
 String htmlPage();
 String jsonEscape(const String &value);
-void handleRoot();
-void handleState();
-void handleSet();
-void handleWifiScan();
-void handleWifiConnect();
-void handleWifiDisconnect();
+void handleRoot(AsyncWebServerRequest *request);
+void handleState(AsyncWebServerRequest *request);
+void handleSet(AsyncWebServerRequest *request);
+void handleWifiScan(AsyncWebServerRequest *request);
+void handleWifiConnect(AsyncWebServerRequest *request);
+void handleWifiDisconnect(AsyncWebServerRequest *request);
 
 void renderGaugeScreen(TFT_eSprite &s);
 
@@ -331,6 +367,29 @@ void initGps();
 void updateGps();
 void updateSpeedFusion();
 void resetSpeedFusion();
+
+enum SpeedSourceMode {
+  SPEED_SOURCE_IDLE,
+  SPEED_SOURCE_GPS,
+  SPEED_SOURCE_IMU_BRIDGE,
+  SPEED_SOURCE_HOLD
+};
+
+enum SpeedFusionLeadMode {
+  SPEED_LEAD_GPS,
+  SPEED_LEAD_ACCEL
+};
+
+extern bool gpsDataSeen;
+extern bool gpsLocationValid;
+extern bool gpsSpeedValid;
+extern uint32_t gpsSatellites;
+extern float gpsRawMph;
+extern double gpsLatitude;
+extern double gpsLongitude;
+extern unsigned long gpsFixAgeMs;
+extern unsigned long lastGpsSpeedSampleMs;
+extern SpeedFusionLeadMode speedFusionLeadMode;
 
 bool prepareSpeakerI2sForBrowserAudio(
   uint32_t sampleRate,
@@ -352,8 +411,15 @@ bool browserAudioFileSaved();
 size_t browserAudioFileSize();
 String browserAudioFileInfoLabel();
 String browserAudioStatusLabel();
-void handleBrowserAudioUpload();
-void handleBrowserAudioUploadComplete();
+void handleBrowserAudioUpload(
+  AsyncWebServerRequest *request,
+  String filename,
+  size_t index,
+  uint8_t *data,
+  size_t length,
+  bool final
+);
+void handleBrowserAudioUploadComplete(AsyncWebServerRequest *request);
 bool initHornSynth();
 bool startHornSynth(String &message);
 void stopHornSynth();
@@ -361,8 +427,8 @@ void triggerShortHornSynth(uint16_t durationMs);
 void cancelHornSynth();
 bool hornSynthIsActive();
 String hornSynthStatusLabel();
-void handleHornMode();
-void handleShortHorn();
+void handleHornMode(AsyncWebServerRequest *request);
+void handleShortHorn(AsyncWebServerRequest *request);
 String hornResponseJson(bool ok, const String &message);
 void sendHornResponse(int code, bool ok, const String &message);
 
@@ -373,6 +439,7 @@ void renderCurrentScreen();
 void renderSpriteUnavailableScreen();
 void loadScreenBrightness();
 void saveScreenBrightness();
+void saveDashboardSettings();
 void applyScreenBrightness();
 void setScreenBrightnessPercent(int brightnessPercent);
 void initWifi();
@@ -419,6 +486,11 @@ const char *vehicleControlModeValue();
 String vehicleControlStatusLabel();
 unsigned long steeringPulseForPercent(int steeringPercent);
 unsigned long throttlePulseForPercent(int throttlePercent);
+void resetThrottleGearState();
+ThrottleGearDirection classifyReceiverThrottleDirection(unsigned long pulseWidthUs);
+void updateReceiverThrottleGear(unsigned long pulseWidthUs);
+void updateWebThrottleGear();
+void applyThrottleDashboardState(unsigned long pulseWidthUs);
 void updateVehicleControlDashboard();
 String throttleInputStatusLabel();
 String turnSignalInputPulseStatusLabel();
@@ -438,11 +510,18 @@ String steeringInputStatusLabel();
 String steeringCalibrationStatusLabel();
 String controllerPage();
 String controllerStateJson();
-void handleControllerPage();
-void handleControllerState();
-void handleControllerArm();
-void handleControllerCommand();
-void handleControllerStop();
+void handleControllerPage(AsyncWebServerRequest *request);
+void handleControllerState(AsyncWebServerRequest *request);
+void handleControllerArm(AsyncWebServerRequest *request);
+void handleControllerCommand(AsyncWebServerRequest *request);
+void handleControllerStop(AsyncWebServerRequest *request);
+void registerApiRoutes();
+void updateApiEvents();
+typedef std::function<void(AsyncWebServerRequest *, JsonVariant &)> ApiJsonHandler;
+void registerApiJsonPost(const char *path, ApiJsonHandler handler);
+void sendApiError(AsyncWebServerRequest *request, int code, const char *error, const String &message);
+bool requestHasArg(AsyncWebServerRequest *request, const char *name);
+String requestArg(AsyncWebServerRequest *request, const char *name);
 String bmeAddressLabel();
 String tiltOrientationName();
 String onOffLabel(bool enabled);
@@ -655,10 +734,34 @@ void loadScreenBrightness() {
     SCREEN_BRIGHTNESS_MIN_PERCENT,
     SCREEN_BRIGHTNESS_MAX_PERCENT
   );
+  tiltOrientationDeg = dashboardPreferences.getInt("tilt_rotation", tiltOrientationDeg);
+  if (tiltOrientationDeg != 0 && tiltOrientationDeg != 90 &&
+      tiltOrientationDeg != 180 && tiltOrientationDeg != 270) {
+    tiltOrientationDeg = 0;
+  }
+  invertPitchAxis = dashboardPreferences.getBool("invert_pitch", invertPitchAxis);
+  invertRollAxis = dashboardPreferences.getBool("invert_roll", invertRollAxis);
+  showTiltAxisLabels = dashboardPreferences.getBool("tilt_labels", showTiltAxisLabels);
+  tiltBubbleToleranceDeg = dashboardPreferences.getFloat("tilt_tolerance", tiltBubbleToleranceDeg);
+  if (tiltBubbleToleranceDeg < 0.0f || tiltBubbleToleranceDeg > 10.0f) {
+    tiltBubbleToleranceDeg = 1.0f;
+  }
+  int savedSpeedMode = dashboardPreferences.getInt("speed_mode", SPEED_LEAD_GPS);
+  speedFusionLeadMode = savedSpeedMode == SPEED_LEAD_ACCEL ? SPEED_LEAD_ACCEL : SPEED_LEAD_GPS;
 }
 
 void saveScreenBrightness() {
   dashboardPreferences.putInt("brightness", screenBrightnessPercent);
+}
+
+void saveDashboardSettings() {
+  dashboardPreferences.putInt("brightness", screenBrightnessPercent);
+  dashboardPreferences.putInt("tilt_rotation", tiltOrientationDeg);
+  dashboardPreferences.putBool("invert_pitch", invertPitchAxis);
+  dashboardPreferences.putBool("invert_roll", invertRollAxis);
+  dashboardPreferences.putBool("tilt_labels", showTiltAxisLabels);
+  dashboardPreferences.putFloat("tilt_tolerance", tiltBubbleToleranceDeg);
+  dashboardPreferences.putInt("speed_mode", (int)speedFusionLeadMode);
 }
 
 void applyScreenBrightness() {
@@ -1023,23 +1126,23 @@ void updateHornPlayback() {
   hornWasRequested = hornRequested;
 }
 
-void handleHornMode() {
-  if (!server.hasArg("mode") || !setHornWebMode(server.arg("mode"))) {
-    sendHornResponse(400, false, "Horn mode must be off, rc, or on");
+void handleHornMode(AsyncWebServerRequest *request) {
+  if (!requestHasArg(request, "mode") || !setHornWebMode(requestArg(request, "mode"))) {
+    request->send(400, "application/json", hornResponseJson(false, "Horn mode must be off, rc, or on"));
     return;
   }
 
-  sendHornResponse(200, true, String("Horn mode: ") + hornWebModeLabel());
+  request->send(200, "application/json", hornResponseJson(true, String("Horn mode: ") + hornWebModeLabel()));
 }
 
-void handleShortHorn() {
+void handleShortHorn(AsyncWebServerRequest *request) {
   if (hornWebMode == HornWebMode::Off) {
-    sendHornResponse(409, false, "Set horn override to RC or On first");
+    request->send(409, "application/json", hornResponseJson(false, "Set horn override to RC or On first"));
     return;
   }
 
   triggerShortHornSynth(WEB_SHORT_HORN_DURATION_MS);
-  sendHornResponse(200, true, "Horn honk");
+  request->send(200, "application/json", hornResponseJson(true, "Horn honk"));
 }
 
 String hornResponseJson(bool ok, const String &message) {
@@ -1056,10 +1159,6 @@ String hornResponseJson(bool ok, const String &message) {
   json += jsonEscape(hornSynthStatusLabel());
   json += "\"}";
   return json;
-}
-
-void sendHornResponse(int code, bool ok, const String &message) {
-  server.send(code, "application/json", hornResponseJson(ok, message));
 }
 
 uint32_t vehiclePwmDutyForPulse(unsigned long pulseUs) {
@@ -1111,6 +1210,142 @@ void IRAM_ATTR handleThrottleReceiverInputChange() {
   handleRcPulseInputChange(throttleReceiverInput);
 }
 
+void resetThrottleGearState() {
+  throttleGearState.committedDirection = ThrottleGearDirection::Neutral;
+  throttleGearState.candidateDirection = ThrottleGearDirection::Neutral;
+  throttleGearState.candidateCount = 0;
+  throttleGearState.initialized = false;
+  throttleGearState.centeredTimerActive = false;
+  throttleGearState.centeredSinceMs = 0;
+}
+
+ThrottleGearDirection classifyReceiverThrottleDirection(unsigned long pulseWidthUs) {
+  if (throttleGearState.initialized) {
+    if (throttleGearState.committedDirection == ThrottleGearDirection::Drive &&
+        pulseWidthUs < THROTTLE_OFF_US - THROTTLE_DIRECTION_RELEASE_TOLERANCE_US) {
+      return ThrottleGearDirection::Drive;
+    }
+    if (throttleGearState.committedDirection == ThrottleGearDirection::Reverse &&
+        pulseWidthUs > THROTTLE_OFF_US + THROTTLE_DIRECTION_RELEASE_TOLERANCE_US) {
+      return ThrottleGearDirection::Reverse;
+    }
+  }
+
+  if (pulseWidthUs < THROTTLE_OFF_US - THROTTLE_DRIVE_ENTRY_TOLERANCE_US) {
+    return ThrottleGearDirection::Drive;
+  }
+  if (pulseWidthUs > THROTTLE_OFF_US + THROTTLE_REVERSE_ENTRY_TOLERANCE_US) {
+    return ThrottleGearDirection::Reverse;
+  }
+  return ThrottleGearDirection::Neutral;
+}
+
+void updateReceiverThrottleGear(unsigned long pulseWidthUs) {
+  if (!throttleReceiverInput.newValidPulse || !throttleReceiverInput.filterReady) {
+    return;
+  }
+
+  ThrottleGearDirection classifiedDirection =
+    classifyReceiverThrottleDirection(pulseWidthUs);
+
+  if (throttleGearState.initialized &&
+      throttleGearState.committedDirection == ThrottleGearDirection::Neutral &&
+      classifiedDirection != ThrottleGearDirection::Neutral) {
+    throttleGearState.centeredTimerActive = false;
+    throttleGearState.centeredSinceMs = 0;
+  }
+
+  if (throttleGearState.initialized &&
+      classifiedDirection == throttleGearState.committedDirection) {
+    throttleGearState.candidateDirection = classifiedDirection;
+    throttleGearState.candidateCount = 0;
+    if (classifiedDirection == ThrottleGearDirection::Neutral &&
+        !throttleGearState.centeredTimerActive) {
+      throttleGearState.centeredTimerActive = true;
+      throttleGearState.centeredSinceMs = millis();
+    }
+    return;
+  }
+
+  if (throttleGearState.candidateCount == 0 ||
+      classifiedDirection != throttleGearState.candidateDirection) {
+    throttleGearState.candidateDirection = classifiedDirection;
+    throttleGearState.candidateCount = 1;
+  } else if (throttleGearState.candidateCount < THROTTLE_GEAR_DEBOUNCE_SAMPLE_COUNT) {
+    throttleGearState.candidateCount++;
+  }
+
+  if (throttleGearState.candidateCount < THROTTLE_GEAR_DEBOUNCE_SAMPLE_COUNT) {
+    return;
+  }
+
+  throttleGearState.committedDirection = classifiedDirection;
+  throttleGearState.candidateCount = 0;
+  throttleGearState.initialized = true;
+  if (classifiedDirection == ThrottleGearDirection::Neutral) {
+    throttleGearState.centeredTimerActive = true;
+    throttleGearState.centeredSinceMs = millis();
+  } else {
+    throttleGearState.centeredTimerActive = false;
+    throttleGearState.centeredSinceMs = 0;
+  }
+}
+
+void updateWebThrottleGear() {
+  ThrottleGearDirection commandedDirection = ThrottleGearDirection::Neutral;
+  if (vehicleControl.throttlePercent > 0) {
+    commandedDirection = ThrottleGearDirection::Drive;
+  } else if (vehicleControl.throttlePercent < 0) {
+    commandedDirection = ThrottleGearDirection::Reverse;
+  }
+
+  if (!throttleGearState.initialized ||
+      commandedDirection != throttleGearState.committedDirection) {
+    throttleGearState.committedDirection = commandedDirection;
+    throttleGearState.candidateDirection = commandedDirection;
+    throttleGearState.candidateCount = 0;
+    throttleGearState.initialized = true;
+    if (commandedDirection == ThrottleGearDirection::Neutral) {
+      throttleGearState.centeredTimerActive = true;
+      throttleGearState.centeredSinceMs = millis();
+    } else {
+      throttleGearState.centeredTimerActive = false;
+      throttleGearState.centeredSinceMs = 0;
+    }
+  }
+}
+
+void applyThrottleDashboardState(unsigned long pulseWidthUs) {
+  dashboardRpmK = 0.0f;
+
+  if (!throttleGearState.initialized ||
+      throttleGearState.committedDirection == ThrottleGearDirection::Neutral) {
+    bool parkDelayElapsed =
+      throttleGearState.initialized &&
+      throttleGearState.centeredTimerActive &&
+      (millis() - throttleGearState.centeredSinceMs) >= THROTTLE_PARK_DELAY_MS;
+    dashboardGearIndex = parkDelayElapsed ? GEAR_PARK_INDEX : GEAR_NEUTRAL_INDEX;
+    return;
+  }
+
+  if (throttleGearState.committedDirection == ThrottleGearDirection::Drive) {
+    float forwardProgress = pulseWidthUs < THROTTLE_OFF_US ?
+      (float)(THROTTLE_OFF_US - pulseWidthUs) /
+        (float)(THROTTLE_OFF_US - THROTTLE_FULL_FORWARD_US) :
+      0.0f;
+    dashboardRpmK = clamp01(forwardProgress) * THROTTLE_RPM_MAX_K;
+    dashboardGearIndex = GEAR_DRIVE_INDEX;
+    return;
+  }
+
+  float reverseProgress = pulseWidthUs > THROTTLE_OFF_US ?
+    (float)(pulseWidthUs - THROTTLE_OFF_US) /
+      (float)(THROTTLE_FULL_REVERSE_US - THROTTLE_OFF_US) :
+    0.0f;
+  dashboardRpmK = clamp01(reverseProgress) * THROTTLE_RPM_MAX_K;
+  dashboardGearIndex = GEAR_REVERSE_INDEX;
+}
+
 void updateVehicleControlDashboard() {
   bool receiverMode = vehicleControl.mode == VehicleControlMode::Receiver;
   if (receiverMode) {
@@ -1142,33 +1377,19 @@ void updateVehicleControlDashboard() {
   }
 
   if (receiverMode && !throttleReceiverInput.filteredPulseFresh) {
+    resetThrottleGearState();
     dashboardRpmK = 0.0f;
     dashboardGearIndex = GEAR_NEUTRAL_INDEX;
     return;
   }
 
   unsigned long pulseWidthUs = vehicleControl.throttlePulseUs;
-  bool forwardActive = pulseWidthUs + THROTTLE_NEUTRAL_TOLERANCE_US < THROTTLE_OFF_US;
-  bool reverseActive = pulseWidthUs > THROTTLE_OFF_US + THROTTLE_NEUTRAL_TOLERANCE_US;
-
-  if (forwardActive) {
-    float forwardProgress = (float)(THROTTLE_OFF_US - pulseWidthUs) /
-      (float)(THROTTLE_OFF_US - THROTTLE_FULL_FORWARD_US);
-    dashboardRpmK = clamp01(forwardProgress) * THROTTLE_RPM_MAX_K;
-    dashboardGearIndex = GEAR_DRIVE_INDEX;
-    return;
+  if (receiverMode) {
+    updateReceiverThrottleGear(pulseWidthUs);
+  } else {
+    updateWebThrottleGear();
   }
-
-  if (reverseActive) {
-    float reverseProgress = (float)(pulseWidthUs - THROTTLE_OFF_US) /
-      (float)(THROTTLE_FULL_REVERSE_US - THROTTLE_OFF_US);
-    dashboardRpmK = clamp01(reverseProgress) * THROTTLE_RPM_MAX_K;
-    dashboardGearIndex = GEAR_REVERSE_INDEX;
-    return;
-  }
-
-  dashboardRpmK = 0.0f;
-  dashboardGearIndex = GEAR_NEUTRAL_INDEX;
+  applyThrottleDashboardState(pulseWidthUs);
 }
 
 void releaseVehiclePwmOutputs() {
@@ -1184,6 +1405,7 @@ void releaseVehiclePwmOutputs() {
 
 void enableReceiverControl() {
   releaseVehiclePwmOutputs();
+  resetThrottleGearState();
   vehicleControl.mode = VehicleControlMode::Receiver;
   vehicleControl.armed = false;
   vehicleControl.lastHeartbeatMs = 0;
@@ -1242,6 +1464,7 @@ bool enableWebControl() {
   ledcAttachPin(STEERING_CONTROL_PIN, STEERING_PWM_CHANNEL);
   ledcAttachPin(THROTTLE_CONTROL_PIN, THROTTLE_PWM_CHANNEL);
 #endif
+  resetThrottleGearState();
   vehicleControl.mode = VehicleControlMode::Web;
   vehicleControl.pwmReady = true;
   return true;
@@ -1302,6 +1525,9 @@ void stopVehicleControl(bool watchdogStop) {
   }
 
   enableReceiverControl();
+  apiControlSessionId = "";
+  apiControlLastSequence = 0;
+  apiControlSequenceSeen = false;
   vehicleControl.watchdogStopped = watchdogStop;
 }
 
@@ -1636,20 +1862,7 @@ void setup() {
 
   initGps();
 
-  server.on("/", handleRoot);
-  server.on("/state", handleState);
-  server.on("/set", handleSet);
-  server.on("/controller", HTTP_GET, handleControllerPage);
-  server.on("/controller/state", HTTP_GET, handleControllerState);
-  server.on("/controller/arm", HTTP_POST, handleControllerArm);
-  server.on("/controller/command", HTTP_POST, handleControllerCommand);
-  server.on("/controller/stop", HTTP_POST, handleControllerStop);
-  server.on("/wifi/scan", HTTP_GET, handleWifiScan);
-  server.on("/wifi/connect", HTTP_POST, handleWifiConnect);
-  server.on("/wifi/disconnect", HTTP_POST, handleWifiDisconnect);
-  server.on("/audio/upload", HTTP_POST, handleBrowserAudioUploadComplete, handleBrowserAudioUpload);
-  server.on("/audio/horn", HTTP_POST, handleHornMode);
-  server.on("/audio/horn/short", HTTP_POST, handleShortHorn);
+  registerApiRoutes();
   server.begin();
 
   renderCurrentScreen();
@@ -1660,11 +1873,9 @@ void loop() {
   updateSoundSwitchInput();
   updateHornPlayback();
   updateVehicleControlWatchdog();
-  if (vehicleControl.mode == VehicleControlMode::Receiver) {
-    updateVehicleControlDashboard();
-  }
+  updateVehicleControlDashboard();
   updateTurnSignalOutputs();
-  server.handleClient();
+  updateApiEvents();
   if (!hornSynthIsActive()) {
     updateBrowserAudioPlayback();
   }

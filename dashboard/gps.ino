@@ -22,18 +22,6 @@ static const float SIGN_LOCK_MIN_GPS_DELTA_MPS = 0.35f;
 static const float SIGN_LOCK_MIN_IMU_DELTA_MPS = 0.12f;
 static const float SIGN_LOCK_SCORE_THRESHOLD = 0.20f;
 
-enum SpeedSourceMode {
-  SPEED_SOURCE_IDLE,
-  SPEED_SOURCE_GPS,
-  SPEED_SOURCE_IMU_BRIDGE,
-  SPEED_SOURCE_HOLD
-};
-
-enum SpeedFusionLeadMode {
-  SPEED_LEAD_GPS,
-  SPEED_LEAD_ACCEL
-};
-
 TinyGPSPlus gps;
 HardwareSerial gpsSerial(1);
 

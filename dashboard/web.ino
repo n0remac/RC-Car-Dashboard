@@ -796,11 +796,11 @@ String htmlPage() {
     </div>
 
     <div class="button-row">
-      <form action="/set" method="get">
+      <form class="api-settings-form" action="#" method="post">
         <input type="hidden" name="tilt_reset" value="1">
         <button class="warning" type="submit">Reset Tilt Zero</button>
       </form>
-      <form action="/set" method="get">
+      <form class="api-settings-form" action="#" method="post">
         <input type="hidden" name="speed_reset" value="1">
         <button class="warning" type="submit">Reset Speed Fusion</button>
       </form>
@@ -808,11 +808,11 @@ String htmlPage() {
 
     <div class="subhead">Speed Fusion Mode</div>
     <div class="button-row">
-      <form action="/set" method="get">
+      <form class="api-settings-form" action="#" method="post">
         <input type="hidden" name="speed_mode" value="gps">
         <button class="secondary" type="submit">GPS_LED_BUTTON</button>
       </form>
-      <form action="/set" method="get">
+      <form class="api-settings-form" action="#" method="post">
         <input type="hidden" name="speed_mode" value="accel">
         <button class="tertiary" type="submit">ACCEL_LED_BUTTON</button>
       </form>
@@ -820,19 +820,19 @@ String htmlPage() {
 
     <div class="subhead">Tilt Orientation</div>
     <div class="button-row">
-      <form action="/set" method="get">
+      <form class="api-settings-form" action="#" method="post">
         <input type="hidden" name="tilt_rotation" value="0">
         <button class="quaternary" type="submit">0 deg</button>
       </form>
-      <form action="/set" method="get">
+      <form class="api-settings-form" action="#" method="post">
         <input type="hidden" name="tilt_rotation" value="90">
         <button class="quaternary" type="submit">90 deg</button>
       </form>
-      <form action="/set" method="get">
+      <form class="api-settings-form" action="#" method="post">
         <input type="hidden" name="tilt_rotation" value="180">
         <button class="quaternary" type="submit">180 deg</button>
       </form>
-      <form action="/set" method="get">
+      <form class="api-settings-form" action="#" method="post">
         <input type="hidden" name="tilt_rotation" value="270">
         <button class="quaternary" type="submit">270 deg</button>
       </form>
@@ -840,18 +840,18 @@ String htmlPage() {
 
     <div class="subhead">Axis Controls</div>
     <div class="button-row">
-      <form action="/set" method="get">
+      <form class="api-settings-form" action="#" method="post">
         <input type="hidden" name="tilt_invert_pitch" value="1">
         <button class="secondary" type="submit">Toggle Pitch</button>
       </form>
-      <form action="/set" method="get">
+      <form class="api-settings-form" action="#" method="post">
         <input type="hidden" name="tilt_invert_roll" value="1">
         <button class="secondary" type="submit">Toggle Roll</button>
       </form>
     </div>
 
     <div class="buttons">
-      <form action="/set" method="get">
+      <form class="api-settings-form" action="#" method="post">
         <input type="hidden" name="tilt_labels" value="1">
         <button class="tertiary" type="submit">AXIS_LABEL_BUTTON</button>
       </form>
@@ -859,19 +859,19 @@ String htmlPage() {
 
     <div class="subhead">Bubble Reset Tolerance</div>
     <div class="button-row">
-      <form action="/set" method="get">
+      <form class="api-settings-form" action="#" method="post">
         <input type="hidden" name="tilt_tolerance" value="0.0">
         <button class="warning" type="submit">0.0 deg</button>
       </form>
-      <form action="/set" method="get">
+      <form class="api-settings-form" action="#" method="post">
         <input type="hidden" name="tilt_tolerance" value="1.0">
         <button class="warning" type="submit">1.0 deg</button>
       </form>
-      <form action="/set" method="get">
+      <form class="api-settings-form" action="#" method="post">
         <input type="hidden" name="tilt_tolerance" value="2.5">
         <button class="warning" type="submit">2.5 deg</button>
       </form>
-      <form action="/set" method="get">
+      <form class="api-settings-form" action="#" method="post">
         <input type="hidden" name="tilt_tolerance" value="5.0">
         <button class="warning" type="submit">5.0 deg</button>
       </form>
@@ -884,6 +884,13 @@ String htmlPage() {
     </div>
   </div>
   <script>
+    function apiJson(path, method, body) {
+      return fetch(path, {
+        method: method || 'GET',
+        headers: body === undefined ? {} : { 'Content-Type': 'application/json' },
+        body: body === undefined ? undefined : JSON.stringify(body)
+      });
+    }
     const steeringSlider = document.getElementById('steeringSlider');
     const thresholdSlider = document.getElementById('thresholdSlider');
     const brightnessSlider = document.getElementById('brightnessSlider');
@@ -953,6 +960,8 @@ String htmlPage() {
     const hornShortButton = document.getElementById('hornShortButton');
     const audioMessageValue = document.getElementById('audioMessageValue');
     let submitTimer = 0;
+    let latestLegacyState = null;
+    let latestApiState = null;
 
     function formatBytes(bytes) {
       const size = Number(bytes) || 0;
@@ -968,7 +977,17 @@ String htmlPage() {
     function sendSetUpdate(params) {
       clearTimeout(submitTimer);
       submitTimer = setTimeout(() => {
-        fetch('/set?' + params.toString());
+        const settings = {};
+        if (params.has('brightness')) settings.display = { brightness_percent: Number(params.get('brightness')) };
+        if (params.has('center_us') || params.has('left_us') || params.has('right_us') || params.has('turn_threshold')) {
+          settings.steering = {
+            center_us: Number(params.get('center_us') || centerUsInput.value),
+            left_us: Number(params.get('left_us') || leftUsInput.value),
+            right_us: Number(params.get('right_us') || rightUsInput.value),
+            turn_threshold_deg: Number(params.get('turn_threshold') || thresholdInput.value)
+          };
+        }
+        apiJson('/api/v1/settings', 'POST', settings);
       }, 120);
     }
 
@@ -1044,6 +1063,7 @@ String htmlPage() {
     }
 
     function applySteeringState(state) {
+      latestLegacyState = state;
       applyWifiState(state);
       applyAudioState(state);
       steeringSlider.value = state.steering_angle;
@@ -1087,9 +1107,9 @@ String htmlPage() {
     }
 
     function pollSteeringState() {
-      fetch('/state')
+      fetch('/api/v1/state')
         .then(response => response.json())
-        .then(applySteeringState)
+        .then(state => { latestApiState = state; applySteeringState(state.legacy); })
         .catch(() => {});
     }
 
@@ -1135,7 +1155,7 @@ String htmlPage() {
 
     function scanWifiNetworks() {
       setWifiMessage('Scanning...');
-      fetch('/wifi/scan')
+      fetch('/api/v1/network/scan')
         .then(response => response.json())
         .then(data => {
           if (data.error) {
@@ -1148,13 +1168,9 @@ String htmlPage() {
     }
 
     function connectWifiNetwork() {
-      const params = new URLSearchParams();
-      params.set('ssid', wifiSsidInput.value);
-      params.set('password', wifiPasswordInput.value);
-      fetch('/wifi/connect', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: params.toString()
+      apiJson('/api/v1/network/connect', 'POST', {
+        ssid: wifiSsidInput.value,
+        password: wifiPasswordInput.value
       })
         .then(response => response.json())
         .then(data => {
@@ -1168,7 +1184,7 @@ String htmlPage() {
     }
 
     function disconnectWifiNetwork() {
-      fetch('/wifi/disconnect', { method: 'POST' })
+      apiJson('/api/v1/network/disconnect', 'POST')
         .then(() => pollSteeringState())
         .catch(() => setWifiMessage('Disconnect request failed.'));
     }
@@ -1207,7 +1223,7 @@ String htmlPage() {
       audioUploadButton.disabled = true;
       setAudioMessage('Uploading...');
 
-      fetch('/audio/upload', {
+      fetch('/api/v1/audio/upload', {
         method: 'POST',
         body: form
       })
@@ -1219,13 +1235,7 @@ String htmlPage() {
     }
 
     function setHornMode(mode) {
-      const params = new URLSearchParams();
-      params.set('mode', mode);
-      fetch('/audio/horn', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: params.toString()
-      })
+      apiJson('/api/v1/audio/horn', 'POST', { mode })
         .then(handleAudioJsonResponse)
         .catch(() => {
           setAudioMessage('Horn mode request failed.');
@@ -1234,7 +1244,7 @@ String htmlPage() {
     }
 
     function triggerShortHorn() {
-      fetch('/audio/horn/short', { method: 'POST' })
+      apiJson('/api/v1/audio/horn/short', 'POST')
         .then(handleAudioJsonResponse)
         .catch(() => {
           setAudioMessage('Horn honk request failed.');
@@ -1257,6 +1267,27 @@ String htmlPage() {
     hornShortButton.addEventListener('click', triggerShortHorn);
     hornModeButtons.forEach(button => {
       button.addEventListener('click', () => setHornMode(button.dataset.hornMode));
+    });
+    document.querySelectorAll('.api-settings-form').forEach(form => {
+      form.addEventListener('submit', event => {
+        event.preventDefault();
+        if (!latestApiState) return;
+        const values = new FormData(form);
+        const settings = {};
+        if (values.has('tilt_reset') || values.has('speed_reset')) {
+          settings.actions = {
+            reset_tilt_reference: values.has('tilt_reset'),
+            reset_speed_fusion: values.has('speed_reset')
+          };
+        }
+        if (values.has('speed_mode')) settings.speed = { lead_mode: values.get('speed_mode') };
+        if (values.has('tilt_rotation')) settings.tilt = Object.assign({}, latestApiState.settings.tilt, { orientation_deg: Number(values.get('tilt_rotation')) });
+        if (values.has('tilt_tolerance')) settings.tilt = Object.assign({}, latestApiState.settings.tilt, { bubble_tolerance_deg: Number(values.get('tilt_tolerance')) });
+        if (values.has('tilt_invert_pitch')) settings.tilt = Object.assign({}, latestApiState.settings.tilt, { invert_pitch: !latestApiState.settings.tilt.invert_pitch });
+        if (values.has('tilt_invert_roll')) settings.tilt = Object.assign({}, latestApiState.settings.tilt, { invert_roll: !latestApiState.settings.tilt.invert_roll });
+        if (values.has('tilt_labels')) settings.tilt = Object.assign({}, latestApiState.settings.tilt, { show_axis_labels: !latestApiState.settings.tilt.show_axis_labels });
+        apiJson('/api/v1/settings', 'POST', settings).then(() => pollSteeringState());
+      });
     });
     pollSteeringState();
     setInterval(pollSteeringState, 250);
@@ -1346,8 +1377,8 @@ String htmlPage() {
   return html;
 }
 
-void handleRoot() {
-  server.send(200, "text/html", htmlPage());
+void handleRoot(AsyncWebServerRequest *request) {
+  request->send(200, "text/html", htmlPage());
 }
 
 String controllerStateJson() {
@@ -1378,11 +1409,11 @@ String controllerStateJson() {
   return json;
 }
 
-void sendControllerError(int code, const String &message) {
+void sendControllerError(AsyncWebServerRequest *request, int code, const String &message) {
   String json = "{\"error\":\"";
   json += jsonEscape(message);
   json += "\"}";
-  server.send(code, "application/json", json);
+  request->send(code, "application/json", json);
 }
 
 bool parseControllerPercent(const String &rawValue, int &percent) {
@@ -1421,50 +1452,50 @@ bool parseControllerPercent(const String &rawValue, int &percent) {
   return percent >= -100 && percent <= 100;
 }
 
-void handleControllerPage() {
-  server.send(200, "text/html", controllerPage());
+void handleControllerPage(AsyncWebServerRequest *request) {
+  request->send(200, "text/html", controllerPage());
 }
 
-void handleControllerState() {
-  server.send(200, "application/json", controllerStateJson());
+void handleControllerState(AsyncWebServerRequest *request) {
+  request->send(200, "application/json", controllerStateJson());
 }
 
-void handleControllerArm() {
+void handleControllerArm(AsyncWebServerRequest *request) {
   if (!armVehicleControl()) {
-    sendControllerError(409, "Web control could not be activated; check steering calibration and PWM setup");
+    sendControllerError(request, 409, "Web control could not be activated; check steering calibration and PWM setup");
     return;
   }
 
-  server.send(200, "application/json", controllerStateJson());
+  request->send(200, "application/json", controllerStateJson());
 }
 
-void handleControllerCommand() {
+void handleControllerCommand(AsyncWebServerRequest *request) {
   if (!vehicleControl.armed) {
-    sendControllerError(409, "Controller is not armed");
+    sendControllerError(request, 409, "Controller is not armed");
     return;
   }
-  if (!server.hasArg("steering") || !server.hasArg("throttle")) {
-    sendControllerError(400, "steering and throttle are required");
+  if (!requestHasArg(request, "steering") || !requestHasArg(request, "throttle")) {
+    sendControllerError(request, 400, "steering and throttle are required");
     return;
   }
 
   int steeringPercent = 0;
   int throttlePercent = 0;
-  if (!parseControllerPercent(server.arg("steering"), steeringPercent) ||
-      !parseControllerPercent(server.arg("throttle"), throttlePercent)) {
-    sendControllerError(400, "steering and throttle must be integers from -100 to 100");
+  if (!parseControllerPercent(requestArg(request, "steering"), steeringPercent) ||
+      !parseControllerPercent(requestArg(request, "throttle"), throttlePercent)) {
+    sendControllerError(request, 400, "steering and throttle must be integers from -100 to 100");
     return;
   }
 
   setVehicleControlCommand(steeringPercent, throttlePercent);
   vehicleControl.lastHeartbeatMs = millis();
   vehicleControl.watchdogStopped = false;
-  server.send(200, "application/json", controllerStateJson());
+  request->send(200, "application/json", controllerStateJson());
 }
 
-void handleControllerStop() {
+void handleControllerStop(AsyncWebServerRequest *request) {
   stopVehicleControl(false);
-  server.send(200, "application/json", controllerStateJson());
+  request->send(200, "application/json", controllerStateJson());
 }
 
 String controllerPage() {
@@ -1600,6 +1631,8 @@ String controllerPage() {
     let activePointer = null;
     let commandInFlight = false;
     let commandQueued = false;
+    let sessionId = '';
+    let sequence = 0;
 
     function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
     function setNotice(message) { noticeValue.textContent = message; }
@@ -1613,6 +1646,7 @@ String controllerPage() {
 
     function applyState(state) {
       armed = Boolean(state.armed);
+      if (state.session_id) sessionId = state.session_id;
       const webMode = state.mode === 'web';
       joystick.classList.toggle('armed', armed);
       armButton.disabled = armed || !state.calibration_valid;
@@ -1622,6 +1656,7 @@ String controllerPage() {
       statusValue.textContent = state.status || (armed ? 'Armed' : 'Ready');
       heartbeatValue.textContent = armed ? (state.heartbeat_age_ms + ' ms') : '—';
       if (!armed) {
+        sessionId = '';
         steering = 0;
         throttle = 0;
         updateJoystick();
@@ -1629,6 +1664,8 @@ String controllerPage() {
     }
 
     async function request(path, options) {
+      options = options || {};
+      options.headers = Object.assign({}, options.headers || {});
       const response = await fetch(path, options);
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'Request failed');
@@ -1637,7 +1674,12 @@ String controllerPage() {
 
     async function armControl() {
       try {
-        const state = await request('/controller/arm', { method: 'POST' });
+        sequence = 0;
+        const state = await request('/api/v1/control/arm', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}'
+        });
         applyState(state);
         setNotice('Web output is active. Hold and drag the joystick to drive.');
       } catch (error) {
@@ -1652,11 +1694,11 @@ String controllerPage() {
         return;
       }
       commandInFlight = true;
-      const params = new URLSearchParams({ steering: String(steering), throttle: String(throttle) });
-      request('/controller/command', {
+      sequence += 1;
+      request('/api/v1/control/command', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: params.toString()
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: sessionId, sequence, steering, throttle })
       }).then(applyState).catch(error => {
         armed = false;
         joystick.classList.remove('armed');
@@ -1677,7 +1719,7 @@ String controllerPage() {
       throttle = 0;
       updateJoystick();
       try {
-        const state = await request('/controller/stop', { method: 'POST' });
+        const state = await request('/api/v1/control/stop', { method: 'POST' });
         applyState(state);
         setNotice('Web output stopped. Receiver input is active.');
       } catch (error) {
@@ -1726,13 +1768,13 @@ String controllerPage() {
     });
     window.addEventListener('pagehide', () => {
       const body = new Blob([''], { type: 'application/x-www-form-urlencoded' });
-      navigator.sendBeacon('/controller/stop', body);
+      navigator.sendBeacon('/api/v1/control/stop', body);
     });
     setInterval(sendCommand, 100);
     setInterval(() => {
-      request('/controller/state').then(applyState).catch(() => {});
+      request('/api/v1/control/state').then(applyState).catch(() => {});
     }, 250);
-    request('/controller/state').then(applyState).catch(() => setNotice('Controller state is unavailable.'));
+    request('/api/v1/control/state').then(applyState).catch(() => setNotice('Controller state is unavailable.'));
     updateJoystick();
   </script>
 </body>
@@ -1979,11 +2021,11 @@ String stateJson() {
   return json;
 }
 
-void handleState() {
-  server.send(200, "application/json", stateJson());
+void handleState(AsyncWebServerRequest *request) {
+  request->send(200, "application/json", stateJson());
 }
 
-void handleWifiScan() {
+void handleWifiScan(AsyncWebServerRequest *request) {
   int networkCount = WiFi.scanNetworks(false, true);
   String json = "{\"networks\":[";
 
@@ -2007,21 +2049,21 @@ void handleWifiScan() {
 
   json += "]}";
   WiFi.scanDelete();
-  server.send(200, "application/json", json);
+  request->send(200, "application/json", json);
 }
 
-void handleWifiConnect() {
-  if (!server.hasArg("ssid")) {
-    server.send(400, "application/json", "{\"error\":\"ssid required\"}");
+void handleWifiConnect(AsyncWebServerRequest *request) {
+  if (!requestHasArg(request, "ssid")) {
+    request->send(400, "application/json", "{\"error\":\"ssid required\"}");
     return;
   }
 
-  String requestedSsid = server.arg("ssid");
-  String requestedPassword = server.hasArg("password") ? server.arg("password") : String("");
+  String requestedSsid = requestArg(request, "ssid");
+  String requestedPassword = requestHasArg(request, "password") ? requestArg(request, "password") : String("");
   requestedSsid.trim();
 
   if (requestedSsid.length() == 0) {
-    server.send(400, "application/json", "{\"error\":\"ssid required\"}");
+    request->send(400, "application/json", "{\"error\":\"ssid required\"}");
     return;
   }
 
@@ -2033,35 +2075,35 @@ void handleWifiConnect() {
   String json = "{\"status\":\"connecting\",\"ssid\":\"";
   json += jsonEscape(wifiStaSsid);
   json += "\"}";
-  server.send(200, "application/json", json);
+  request->send(200, "application/json", json);
 }
 
-void handleWifiDisconnect() {
+void handleWifiDisconnect(AsyncWebServerRequest *request) {
   WiFi.disconnect(false, false);
   WiFi.mode(WIFI_AP_STA);
   clearWifiStationCredentials();
-  server.send(200, "application/json", "{\"status\":\"disconnected\"}");
+  request->send(200, "application/json", "{\"status\":\"disconnected\"}");
 }
 
-void handleSet() {
+void handleSet(AsyncWebServerRequest *request) {
   bool liveSteeringUpdate = (
-    server.hasArg("turn_threshold") ||
-    server.hasArg("center_us") ||
-    server.hasArg("left_us") ||
-    server.hasArg("right_us") ||
-    server.hasArg("brightness")
+    requestHasArg(request, "turn_threshold") ||
+    requestHasArg(request, "center_us") ||
+    requestHasArg(request, "left_us") ||
+    requestHasArg(request, "right_us") ||
+    requestHasArg(request, "brightness")
   ) &&
-    !server.hasArg("tilt_rotation") &&
-    !server.hasArg("tilt_reset") &&
-    !server.hasArg("speed_reset") &&
-    !server.hasArg("speed_mode") &&
-    !server.hasArg("tilt_invert_pitch") &&
-    !server.hasArg("tilt_invert_roll") &&
-    !server.hasArg("tilt_labels") &&
-    !server.hasArg("tilt_tolerance");
+    !requestHasArg(request, "tilt_rotation") &&
+    !requestHasArg(request, "tilt_reset") &&
+    !requestHasArg(request, "speed_reset") &&
+    !requestHasArg(request, "speed_mode") &&
+    !requestHasArg(request, "tilt_invert_pitch") &&
+    !requestHasArg(request, "tilt_invert_roll") &&
+    !requestHasArg(request, "tilt_labels") &&
+    !requestHasArg(request, "tilt_tolerance");
 
-  if (server.hasArg("tilt_rotation")) {
-    int requestedRotation = server.arg("tilt_rotation").toInt();
+  if (requestHasArg(request, "tilt_rotation")) {
+    int requestedRotation = requestArg(request, "tilt_rotation").toInt();
     if (requestedRotation == 0 || requestedRotation == 90 ||
         requestedRotation == 180 || requestedRotation == 270) {
       tiltOrientationDeg = requestedRotation;
@@ -2070,16 +2112,16 @@ void handleSet() {
     }
   }
 
-  if (server.hasArg("tilt_reset")) {
+  if (requestHasArg(request, "tilt_reset")) {
     resetTiltReference();
   }
 
-  if (server.hasArg("speed_reset")) {
+  if (requestHasArg(request, "speed_reset")) {
     resetSpeedFusion();
   }
 
-  if (server.hasArg("speed_mode")) {
-    String requestedMode = server.arg("speed_mode");
+  if (requestHasArg(request, "speed_mode")) {
+    String requestedMode = requestArg(request, "speed_mode");
     if (requestedMode == "gps") {
       setSpeedFusionLeadMode(SPEED_LEAD_GPS);
     } else if (requestedMode == "accel") {
@@ -2087,64 +2129,64 @@ void handleSet() {
     }
   }
 
-  if (server.hasArg("tilt_invert_pitch")) {
+  if (requestHasArg(request, "tilt_invert_pitch")) {
     invertPitchAxis = !invertPitchAxis;
     applyTiltOrientation();
   }
 
-  if (server.hasArg("tilt_invert_roll")) {
+  if (requestHasArg(request, "tilt_invert_roll")) {
     invertRollAxis = !invertRollAxis;
     applyTiltOrientation();
   }
 
-  if (server.hasArg("tilt_labels")) {
+  if (requestHasArg(request, "tilt_labels")) {
     showTiltAxisLabels = !showTiltAxisLabels;
   }
 
-  if (server.hasArg("tilt_tolerance")) {
-    float requestedTolerance = server.arg("tilt_tolerance").toFloat();
+  if (requestHasArg(request, "tilt_tolerance")) {
+    float requestedTolerance = requestArg(request, "tilt_tolerance").toFloat();
     if (requestedTolerance >= 0.0f && requestedTolerance <= 10.0f) {
       tiltBubbleToleranceDeg = requestedTolerance;
       applyTiltOrientation();
     }
   }
 
-  if (server.hasArg("brightness")) {
-    setScreenBrightnessPercent(server.arg("brightness").toInt());
+  if (requestHasArg(request, "brightness")) {
+    setScreenBrightnessPercent(requestArg(request, "brightness").toInt());
   }
 
   bool steeringSettingsChanged = false;
 
-  if (server.hasArg("center_us")) {
+  if (requestHasArg(request, "center_us")) {
     steeringCenterUs = clampInt(
-      server.arg("center_us").toInt(),
+      requestArg(request, "center_us").toInt(),
       STEERING_PULSE_MIN_VALID_US,
       STEERING_PULSE_MAX_VALID_US
     );
     steeringSettingsChanged = true;
   }
 
-  if (server.hasArg("left_us")) {
+  if (requestHasArg(request, "left_us")) {
     steeringLeftUs = clampInt(
-      server.arg("left_us").toInt(),
+      requestArg(request, "left_us").toInt(),
       STEERING_PULSE_MIN_VALID_US,
       STEERING_PULSE_MAX_VALID_US
     );
     steeringSettingsChanged = true;
   }
 
-  if (server.hasArg("right_us")) {
+  if (requestHasArg(request, "right_us")) {
     steeringRightUs = clampInt(
-      server.arg("right_us").toInt(),
+      requestArg(request, "right_us").toInt(),
       STEERING_PULSE_MIN_VALID_US,
       STEERING_PULSE_MAX_VALID_US
     );
     steeringSettingsChanged = true;
   }
 
-  if (server.hasArg("turn_threshold")) {
+  if (requestHasArg(request, "turn_threshold")) {
     turnSignalThresholdDeg = clampInt(
-      server.arg("turn_threshold").toInt(),
+      requestArg(request, "turn_threshold").toInt(),
       TURN_THRESHOLD_MIN_DEG,
       TURN_THRESHOLD_MAX_DEG
     );
@@ -2161,14 +2203,16 @@ void handleSet() {
   }
 
   updateTurnSignalOutputs();
+  saveDashboardSettings();
 
   renderCurrentScreen();
 
   if (liveSteeringUpdate) {
-    server.send(204, "text/plain", "");
+    request->send(204, "text/plain", "");
     return;
   }
 
-  server.sendHeader("Location", "/", true);
-  server.send(302, "text/plain", "OK");
+  AsyncWebServerResponse *response = request->beginResponse(302, "text/plain", "OK");
+  response->addHeader("Location", "/");
+  request->send(response);
 }

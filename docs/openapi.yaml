@@ -1,0 +1,320 @@
+openapi: 3.1.0
+info:
+  title: CarDashboard API
+  version: 1.0.0
+  description: |
+    Local HTTP API for CarDashboard telemetry, settings, audio, networking, and
+    high-level vehicle control. It is plaintext and intended only for trusted
+    local networks. A physical emergency stop remains required.
+servers:
+  - url: http://192.168.4.1
+    description: Default CarRadio access point
+tags:
+  - name: Telemetry
+  - name: Control
+  - name: Settings
+  - name: Network
+  - name: Audio
+paths:
+  /api/v1/state:
+    get:
+      tags: [Telemetry]
+      summary: Read the complete device state
+      responses:
+        '200':
+          description: Current state
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/State'}
+  /api/v1/sensors:
+    get:
+      tags: [Telemetry]
+      summary: Read environment, IMU, GPS, and fused-speed sensors
+      responses:
+        '200':
+          description: Current sensors
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Sensors'}
+  /api/v1/inputs:
+    get:
+      tags: [Telemetry]
+      summary: Read RC pulse inputs
+      responses:
+        '200':
+          description: Current inputs
+          content:
+            application/json:
+              schema: {type: object, additionalProperties: true}
+  /api/v1/events:
+    get:
+      tags: [Telemetry]
+      summary: Stream full state at 4 Hz using Server-Sent Events
+      description: Only one subscriber is accepted. Further subscribers are disconnected.
+      responses:
+        '200':
+          description: A stream of `state` events whose data is the State JSON object, plus periodic `keepalive` events
+          content:
+            text/event-stream:
+              schema: {type: string}
+  /api/v1/control/state:
+    get:
+      tags: [Control]
+      summary: Read vehicle-control state
+      responses:
+        '200': {$ref: '#/components/responses/ControlResponse'}
+  /api/v1/control/arm:
+    post:
+      tags: [Control]
+      summary: Switch steering and throttle pins to PWM and start a control session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object, additionalProperties: false}
+            example: {}
+      responses:
+        '200': {$ref: '#/components/responses/ControlResponse'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/control/command:
+    post:
+      tags: [Control]
+      summary: Apply a command and refresh the 500 ms watchdog
+      description: Session must match the latest arm response and sequence must strictly increase.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ControlCommand'}
+            example: {session_id: a1b2c3d4e5f60708, sequence: 128, steering: -25, throttle: 40}
+      responses:
+        '200': {$ref: '#/components/responses/ControlResponse'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+  /api/v1/control/stop:
+    post:
+      tags: [Control]
+      summary: Neutralize outputs and return to receiver mode
+      description: Any connected client can request the safe state.
+      responses:
+        '200': {$ref: '#/components/responses/ControlResponse'}
+  /api/v1/settings:
+    post:
+      tags: [Settings]
+      summary: Atomically apply a partial settings object
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/SettingsPatch'}
+      responses:
+        '200':
+          description: Applied settings
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Settings'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+  /api/v1/network/scan:
+    get:
+      tags: [Network]
+      summary: Scan nearby Wi-Fi networks
+      responses:
+        '200':
+          description: Scan results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  networks: {type: array, items: {$ref: '#/components/schemas/WifiNetwork'}}
+  /api/v1/network/connect:
+    post:
+      tags: [Network]
+      summary: Save station credentials and connect
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ssid]
+              properties:
+                ssid: {type: string, minLength: 1}
+                password: {type: string}
+      responses:
+        '200': {description: Connection started}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+  /api/v1/network/disconnect:
+    post:
+      tags: [Network]
+      summary: Disconnect and delete station credentials
+      responses:
+        '200': {description: Disconnected}
+  /api/v1/audio/upload:
+    post:
+      tags: [Audio]
+      summary: Upload a 16-bit PCM WAV to LittleFS
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [sound]
+              properties:
+                sound: {type: string, format: binary}
+      responses:
+        '200': {description: WAV stored}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+  /api/v1/audio/horn:
+    post:
+      tags: [Audio]
+      summary: Set the horn override mode
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mode]
+              properties:
+                mode: {type: string, enum: [off, rc, on]}
+      responses:
+        '200': {description: Audio state}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+  /api/v1/audio/horn/short:
+    post:
+      tags: [Audio]
+      summary: Trigger a 220 ms horn request
+      responses:
+        '200': {description: Audio state}
+        '409': {$ref: '#/components/responses/Conflict'}
+components:
+  schemas:
+    Error:
+      type: object
+      required: [ok, error, message]
+      properties:
+        ok: {const: false}
+        error: {type: string}
+        message: {type: string}
+    ControlCommand:
+      type: object
+      additionalProperties: false
+      required: [session_id, sequence, steering, throttle]
+      properties:
+        session_id: {type: string, pattern: '^[0-9a-f]{16}$'}
+        sequence: {type: integer, minimum: 0, maximum: 4294967295}
+        steering: {type: integer, minimum: -100, maximum: 100}
+        throttle: {type: integer, minimum: -100, maximum: 100}
+    Control:
+      type: object
+      required: [armed, mode, steering, throttle, watchdog_timeout_ms, session_id, last_sequence]
+      properties:
+        armed: {type: boolean}
+        mode: {type: string, enum: [receiver, web]}
+        status: {type: string}
+        steering: {type: integer, minimum: -100, maximum: 100}
+        throttle: {type: integer, minimum: -100, maximum: 100}
+        steering_pulse_us: {type: integer}
+        throttle_pulse_us: {type: integer}
+        heartbeat_age_ms: {type: integer}
+        watchdog_timeout_ms: {type: integer, const: 500}
+        watchdog_stopped: {type: boolean}
+        calibration_valid: {type: boolean}
+        session_id: {type: string}
+        last_sequence: {type: integer}
+    Sensors:
+      type: object
+      required: [environment, imu, gps, speed]
+      properties:
+        environment: {type: object, additionalProperties: true}
+        imu: {type: object, additionalProperties: true}
+        gps: {type: object, additionalProperties: true}
+        speed: {type: object, additionalProperties: true}
+    Settings:
+      type: object
+      required: [display, steering, tilt, speed]
+      properties:
+        display: {type: object, additionalProperties: true}
+        steering: {type: object, additionalProperties: true}
+        tilt: {type: object, additionalProperties: true}
+        speed: {type: object, additionalProperties: true}
+    SettingsPatch:
+      type: object
+      additionalProperties: false
+      properties:
+        display:
+          type: object
+          properties:
+            brightness_percent: {type: integer, minimum: 5, maximum: 100}
+        steering:
+          type: object
+          properties:
+            center_us: {type: integer, minimum: 900, maximum: 2100}
+            left_us: {type: integer, minimum: 900, maximum: 2100}
+            right_us: {type: integer, minimum: 900, maximum: 2100}
+            turn_threshold_deg: {type: integer, minimum: 0, maximum: 45}
+        tilt:
+          type: object
+          properties:
+            orientation_deg: {type: integer, enum: [0, 90, 180, 270]}
+            invert_pitch: {type: boolean}
+            invert_roll: {type: boolean}
+            show_axis_labels: {type: boolean}
+            bubble_tolerance_deg: {type: number, minimum: 0, maximum: 10}
+        speed:
+          type: object
+          properties:
+            lead_mode: {type: string, enum: [gps, accel]}
+        actions:
+          type: object
+          properties:
+            reset_tilt_reference: {type: boolean}
+            reset_speed_fusion: {type: boolean}
+    State:
+      type: object
+      required: [device, control, sensors, inputs, dashboard, audio, network, settings]
+      properties:
+        device: {type: object, additionalProperties: true}
+        control: {$ref: '#/components/schemas/Control'}
+        sensors: {$ref: '#/components/schemas/Sensors'}
+        inputs: {type: object, additionalProperties: true}
+        dashboard: {type: object, additionalProperties: true}
+        audio: {type: object, additionalProperties: true}
+        network: {type: object, additionalProperties: true}
+        settings: {$ref: '#/components/schemas/Settings'}
+        legacy:
+          type: object
+          deprecated: true
+          description: Temporary flat view consumed by the embedded diagnostics page.
+          additionalProperties: true
+    WifiNetwork:
+      type: object
+      required: [ssid, rssi, channel, secure]
+      properties:
+        ssid: {type: string}
+        rssi: {type: integer}
+        channel: {type: integer}
+        secure: {type: boolean}
+  responses:
+    ControlResponse:
+      description: Current control state
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Control'}
+    BadRequest:
+      description: Malformed JSON or missing field
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+    Conflict:
+      description: Invalid current state, session, or sequence
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+    Unprocessable:
+      description: JSON is valid but a value or combination is invalid
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+    Unavailable:
+      description: Required hardware or storage is unavailable
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
