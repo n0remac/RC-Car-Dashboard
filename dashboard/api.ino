@@ -69,6 +69,8 @@ String apiControlJson() {
   json += vehicleControl.armed ? "true" : "false";
   json += ",\"mode\":\"";
   json += vehicleControlModeValue();
+  json += "\",\"owner\":\"";
+  json += vehicleControlOwnerValue();
   json += "\",\"status\":\"";
   json += jsonEscape(vehicleControlStatusLabel());
   json += "\",\"steering\":" + String(vehicleControl.steeringPercent);
@@ -181,15 +183,38 @@ String apiNetworkJson() {
   json += ",\"ap_ip\":\"" + WiFi.softAPIP().toString() + "\"";
   json += ",\"station_status\":\"" + jsonEscape(wifiStationStatusLabel()) + "\"";
   json += ",\"station_ip\":\"" + jsonEscape(wifiStationIpLabel()) + "\"";
-  json += ",\"station_ssid\":\"" + jsonEscape(wifiStaSsid) + "\"";
+  json += ",\"station_ssid\":\"" + jsonEscape(wifiStationNetworkLabel()) + "\"";
+  json += ",\"configured_ssid\":\"" + jsonEscape(wifiStaSsid) + "\"";
+  json += ",\"station_error\":\"" + jsonEscape(wifiStationErrorLabel()) + "\"";
   json += ",\"station_saved\":";
   json += wifiStaCredentialsSaved ? "true" : "false";
   json += "}";
   return json;
 }
 
+String apiDashboardColorsJson() {
+  String json = "{\"background\":\"" + dashboardColorHex(dashboardColors.background);
+  json += "\",\"primary\":\"" + dashboardColorHex(dashboardColors.primary);
+  json += "\",\"detail\":\"" + dashboardColorHex(dashboardColors.detail);
+  json += "\",\"accent\":\"" + dashboardColorHex(dashboardColors.accent);
+  json += "\",\"gear_selected_background\":\"" + dashboardColorHex(dashboardColors.gearSelectedBackground);
+  json += "\",\"gear_selected_text\":\"" + dashboardColorHex(dashboardColors.gearSelectedText);
+  json += "\",\"gear_unselected_text\":\"" + dashboardColorHex(dashboardColors.gearUnselectedText);
+  json += "\",\"turn_active\":\"" + dashboardColorHex(dashboardColors.turnActive);
+  json += "\",\"turn_inactive\":\"" + dashboardColorHex(dashboardColors.turnInactive);
+  json += "\",\"headlight_active\":\"" + dashboardColorHex(dashboardColors.headlightActive);
+  json += "\",\"headlight_inactive\":\"" + dashboardColorHex(dashboardColors.headlightInactive);
+  json += "\",\"warning_active\":\"" + dashboardColorHex(dashboardColors.warningActive);
+  json += "\",\"warning_inactive\":\"" + dashboardColorHex(dashboardColors.warningInactive) + "\"}";
+  return json;
+}
+
 String apiSettingsJson() {
-  String json = "{\"display\":{\"brightness_percent\":" + String(screenBrightnessPercent) + "}";
+  String json = "{\"display\":{\"brightness_percent\":" + String(screenBrightnessPercent);
+  json += ",\"scale_percent\":" + String(dashboardScalePercent);
+  json += ",\"offset_x_px\":" + String(dashboardOffsetX);
+  json += ",\"offset_y_px\":" + String(dashboardOffsetY);
+  json += ",\"colors\":" + apiDashboardColorsJson() + "}";
   json += ",\"steering\":{\"center_us\":" + String(steeringCenterUs);
   json += ",\"left_us\":" + String(steeringLeftUs) + ",\"right_us\":" + String(steeringRightUs);
   json += ",\"turn_threshold_deg\":" + String(turnSignalThresholdDeg) + "}";
@@ -215,6 +240,7 @@ String apiStateJson() {
   json += ",\"dashboard\":" + apiDashboardJson();
   json += ",\"audio\":" + apiAudioJson();
   json += ",\"network\":" + apiNetworkJson();
+  json += ",\"remote\":" + apiRemoteJson();
   json += ",\"settings\":" + apiSettingsJson();
   // Temporary compatibility view used by the embedded dashboard while its
   // individual readouts are migrated to the nested public schema.
@@ -297,6 +323,10 @@ void handleApiControlCommand(AsyncWebServerRequest *request, JsonVariant &body) 
     sendApiError(request, 409, "control_not_armed", "Vehicle control is not armed.");
     return;
   }
+  if (vehicleControlOwner != VehicleControlOwner::Local) {
+    sendApiError(request, 409, "control_owned_remotely", "The remote controller owns vehicle control.");
+    return;
+  }
   String sessionId = object["session_id"].as<String>();
   uint32_t sequence = object["sequence"].as<uint32_t>();
   int steering = object["steering"].as<int>();
@@ -335,6 +365,29 @@ bool jsonObjectHasOnly(JsonObject object, const char *allowed[], size_t allowedC
   return true;
 }
 
+int hexColorNibble(char value) {
+  if (value >= '0' && value <= '9') return value - '0';
+  if (value >= 'a' && value <= 'f') return value - 'a' + 10;
+  if (value >= 'A' && value <= 'F') return value - 'A' + 10;
+  return -1;
+}
+
+bool parseHexColor(JsonObject object, const char *key, uint32_t &target) {
+  if (!object.containsKey(key)) return true;
+  if (!object[key].is<const char *>()) return false;
+  const char *value = object[key].as<const char *>();
+  if (value == nullptr || strlen(value) != 7 || value[0] != '#') return false;
+
+  uint32_t parsed = 0;
+  for (int i = 1; i < 7; ++i) {
+    int nibble = hexColorNibble(value[i]);
+    if (nibble < 0) return false;
+    parsed = (parsed << 4) | (uint32_t)nibble;
+  }
+  target = parsed;
+  return true;
+}
+
 void handleApiSettings(AsyncWebServerRequest *request, JsonVariant &body) {
   if (!body.is<JsonObject>()) {
     sendApiError(request, 400, "invalid_json", "A JSON object is required.");
@@ -348,6 +401,10 @@ void handleApiSettings(AsyncWebServerRequest *request, JsonVariant &body) {
   }
 
   int brightness = screenBrightnessPercent;
+  int displayScale = dashboardScalePercent;
+  int displayOffsetX = dashboardOffsetX;
+  int displayOffsetY = dashboardOffsetY;
+  DashboardColors colors = dashboardColors;
   unsigned long center = steeringCenterUs, left = steeringLeftUs, right = steeringRightUs;
   int threshold = turnSignalThresholdDeg, orientation = tiltOrientationDeg;
   bool pitchInvert = invertPitchAxis, rollInvert = invertRollAxis, labels = showTiltAxisLabels;
@@ -358,10 +415,76 @@ void handleApiSettings(AsyncWebServerRequest *request, JsonVariant &body) {
   if (root.containsKey("display")) {
     if (!root["display"].is<JsonObject>()) { sendApiError(request, 422, "invalid_settings", "display must be an object."); return; }
     JsonObject value = root["display"];
-    const char *keys[] = {"brightness_percent"};
-    if (!jsonObjectHasOnly(value, keys, 1) || !value["brightness_percent"].is<int>()) { sendApiError(request, 422, "invalid_settings", "brightness_percent must be an integer."); return; }
-    brightness = value["brightness_percent"];
-    if (brightness < SCREEN_BRIGHTNESS_MIN_PERCENT || brightness > SCREEN_BRIGHTNESS_MAX_PERCENT) { sendApiError(request, 422, "value_out_of_range", "brightness_percent is out of range."); return; }
+    const char *keys[] = {"brightness_percent", "scale_percent", "offset_x_px", "offset_y_px", "colors"};
+    if (!jsonObjectHasOnly(value, keys, 5)) { sendApiError(request, 422, "unknown_field", "display contains an unknown field."); return; }
+    if (value.size() == 0) { sendApiError(request, 422, "invalid_settings", "display must contain at least one setting."); return; }
+
+    if (value.containsKey("colors")) {
+      if (!value["colors"].is<JsonObject>()) { sendApiError(request, 422, "invalid_settings", "colors must be an object."); return; }
+      JsonObject colorValues = value["colors"];
+      const char *colorKeys[] = {
+        "background", "primary", "detail", "accent",
+        "gear_selected_background", "gear_selected_text", "gear_unselected_text",
+        "turn_active", "turn_inactive", "headlight_active", "headlight_inactive",
+        "warning_active", "warning_inactive"
+      };
+      if (!jsonObjectHasOnly(colorValues, colorKeys, 13)) { sendApiError(request, 422, "unknown_field", "colors contains an unknown field."); return; }
+      if (colorValues.size() == 0) { sendApiError(request, 422, "invalid_settings", "colors must contain at least one setting."); return; }
+      bool colorsValid =
+        parseHexColor(colorValues, "background", colors.background) &&
+        parseHexColor(colorValues, "primary", colors.primary) &&
+        parseHexColor(colorValues, "detail", colors.detail) &&
+        parseHexColor(colorValues, "accent", colors.accent) &&
+        parseHexColor(colorValues, "gear_selected_background", colors.gearSelectedBackground) &&
+        parseHexColor(colorValues, "gear_selected_text", colors.gearSelectedText) &&
+        parseHexColor(colorValues, "gear_unselected_text", colors.gearUnselectedText) &&
+        parseHexColor(colorValues, "turn_active", colors.turnActive) &&
+        parseHexColor(colorValues, "turn_inactive", colors.turnInactive) &&
+        parseHexColor(colorValues, "headlight_active", colors.headlightActive) &&
+        parseHexColor(colorValues, "headlight_inactive", colors.headlightInactive) &&
+        parseHexColor(colorValues, "warning_active", colors.warningActive) &&
+        parseHexColor(colorValues, "warning_inactive", colors.warningInactive);
+      if (!colorsValid) { sendApiError(request, 422, "invalid_settings", "Each color must be a string in #RRGGBB format."); return; }
+    }
+
+    if (value.containsKey("brightness_percent")) {
+      if (!value["brightness_percent"].is<int>()) { sendApiError(request, 422, "invalid_settings", "brightness_percent must be an integer."); return; }
+      brightness = value["brightness_percent"];
+      if (brightness < SCREEN_BRIGHTNESS_MIN_PERCENT || brightness > SCREEN_BRIGHTNESS_MAX_PERCENT) { sendApiError(request, 422, "value_out_of_range", "brightness_percent is out of range."); return; }
+    }
+
+    bool scaleProvided = value.containsKey("scale_percent");
+    bool offsetXProvided = value.containsKey("offset_x_px");
+    bool offsetYProvided = value.containsKey("offset_y_px");
+    if (scaleProvided) {
+      if (!value["scale_percent"].is<int>()) { sendApiError(request, 422, "invalid_settings", "scale_percent must be an integer."); return; }
+      displayScale = value["scale_percent"];
+      if (displayScale < DASHBOARD_SCALE_MIN_PERCENT || displayScale > DASHBOARD_SCALE_MAX_PERCENT) { sendApiError(request, 422, "value_out_of_range", "scale_percent is out of range."); return; }
+    }
+    if (offsetXProvided && !value["offset_x_px"].is<int>()) { sendApiError(request, 422, "invalid_settings", "offset_x_px must be an integer."); return; }
+    if (offsetYProvided && !value["offset_y_px"].is<int>()) { sendApiError(request, 422, "invalid_settings", "offset_y_px must be an integer."); return; }
+
+    int oldMaxOffsetX = dashboardMaxOffsetX(dashboardScalePercent);
+    int oldMaxOffsetY = dashboardMaxOffsetY(dashboardScalePercent);
+    int newMaxOffsetX = dashboardMaxOffsetX(displayScale);
+    int newMaxOffsetY = dashboardMaxOffsetY(displayScale);
+    if (scaleProvided && !offsetXProvided) {
+      displayOffsetX = oldMaxOffsetX > 0 ?
+        ((dashboardOffsetX * newMaxOffsetX) + (oldMaxOffsetX / 2)) / oldMaxOffsetX :
+        (newMaxOffsetX + 1) / 2;
+    }
+    if (scaleProvided && !offsetYProvided) {
+      displayOffsetY = oldMaxOffsetY > 0 ?
+        ((dashboardOffsetY * newMaxOffsetY) + (oldMaxOffsetY / 2)) / oldMaxOffsetY :
+        (newMaxOffsetY + 1) / 2;
+    }
+    if (offsetXProvided) displayOffsetX = value["offset_x_px"];
+    if (offsetYProvided) displayOffsetY = value["offset_y_px"];
+    if (displayOffsetX < 0 || displayOffsetX > newMaxOffsetX ||
+        displayOffsetY < 0 || displayOffsetY > newMaxOffsetY) {
+      sendApiError(request, 422, "value_out_of_range", "Display offsets must keep the scaled dashboard within the screen.");
+      return;
+    }
   }
   if (root.containsKey("steering")) {
     if (!root["steering"].is<JsonObject>()) { sendApiError(request, 422, "invalid_settings", "steering must be an object."); return; }
@@ -403,6 +526,8 @@ void handleApiSettings(AsyncWebServerRequest *request, JsonVariant &body) {
   }
 
   setScreenBrightnessPercent(brightness);
+  applyDashboardDisplayTransform(displayScale, displayOffsetX, displayOffsetY);
+  dashboardColors = colors;
   bool steeringChanged = center != steeringCenterUs || left != steeringLeftUs || right != steeringRightUs || threshold != turnSignalThresholdDeg;
   steeringCenterUs = center; steeringLeftUs = left; steeringRightUs = right; turnSignalThresholdDeg = threshold;
   if (steeringChanged) saveSteeringCalibration();
@@ -471,7 +596,11 @@ void registerApiRoutes() {
   server.on("/api/v1/sensors", HTTP_GET, [](AsyncWebServerRequest *request) { sendApiJson(request, apiSensorsJson()); });
   server.on("/api/v1/inputs", HTTP_GET, [](AsyncWebServerRequest *request) { sendApiJson(request, apiInputsJson()); });
   server.on("/api/v1/control/state", HTTP_GET, [](AsyncWebServerRequest *request) { sendApiJson(request, apiControlJson()); });
-  server.on("/api/v1/control/stop", HTTP_POST, [](AsyncWebServerRequest *request) { stopVehicleControl(false); sendApiJson(request, apiControlJson()); });
+  server.on("/api/v1/control/stop", HTTP_POST, [](AsyncWebServerRequest *request) {
+    latchRemoteStopFromLocal();
+    stopVehicleControl(false);
+    sendApiJson(request, apiControlJson());
+  });
   server.on("/api/v1/network/scan", HTTP_GET, handleWifiScan);
   server.on("/api/v1/network/disconnect", HTTP_POST, [](AsyncWebServerRequest *request) {
     WiFi.disconnect(false, false); WiFi.mode(WIFI_AP_STA); clearWifiStationCredentials();

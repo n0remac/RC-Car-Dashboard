@@ -109,10 +109,22 @@ String htmlPage() {
   String calibrationStatusValue = steeringCalibrationStatusLabel();
   String calibrationValidValue = steeringCalibrationValid() ? String("Yes") : String("No");
   String brightnessValue = String(screenBrightnessPercent);
+  String dashboardScaleValue = String(dashboardScalePercent);
+  String dashboardOffsetXValue = String(dashboardOffsetX);
+  String dashboardOffsetYValue = String(dashboardOffsetY);
+  String dashboardOffsetXMaxValue = String(dashboardMaxOffsetX(dashboardScalePercent));
+  String dashboardOffsetYMaxValue = String(dashboardMaxOffsetY(dashboardScalePercent));
+  String wifiApIpValue = WiFi.softAPIP().toString();
   String wifiStaSsidValue = wifiStaSsid.length() > 0 ? htmlEscape(wifiStaSsid) : String("None");
   String wifiStaStatusValue = wifiStationStatusLabel();
   String wifiStaIpValue = wifiStationIpLabel();
+  String wifiStaNetworkValue = htmlEscape(wifiStationNetworkLabel());
+  String wifiStaErrorValue = htmlEscape(wifiStationErrorLabel());
   String wifiStaSavedValue = wifiStaCredentialsSaved ? String("Yes") : String("No");
+  String remoteServerValue = htmlEscape(remoteServerLabel());
+  String remoteStatusValue = htmlEscape(remoteStatusLabel());
+  String remoteLastSyncValue = htmlEscape(remoteLastSyncLabel());
+  String remoteErrorValue = htmlEscape(remoteErrorLabel());
   String audioOutputStatusValue = speakerI2sStatusLabel();
   String audioOutputPinsValue = speakerI2sPinsLabel();
   String audioStorageStatusValue = browserAudioStorageReady() ? String("Ready") : String("Unavailable");
@@ -304,6 +316,42 @@ String htmlPage() {
       background: #101010;
       font-size: 15px;
     }
+    .color-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .color-field {
+      display: grid;
+      grid-template-columns: 48px minmax(0, 1fr);
+      gap: 10px;
+      align-items: center;
+      background: #151515;
+      border: 1px solid #303030;
+      border-radius: 10px;
+      padding: 10px;
+    }
+    .color-field input[type="color"] {
+      width: 48px;
+      height: 38px;
+      box-sizing: border-box;
+      border: 1px solid #3a3a3a;
+      border-radius: 8px;
+      padding: 2px;
+      background: #101010;
+      cursor: pointer;
+    }
+    .color-value {
+      color: #d8d8d8;
+      font-family: monospace;
+      font-size: 13px;
+    }
+    .color-message {
+      color: #d8d8d8;
+      min-height: 18px;
+      font-size: 13px;
+      line-height: 1.4;
+    }
     .network-form {
       display: grid;
       grid-template-columns: minmax(0, 1fr);
@@ -412,6 +460,11 @@ String htmlPage() {
     a {
       color: #7dd3fc;
     }
+    @media (max-width: 430px) {
+      .color-grid {
+        grid-template-columns: minmax(0, 1fr);
+      }
+    }
   </style>
 </head>
 <body>
@@ -425,7 +478,9 @@ String htmlPage() {
       <div class="status">
         <span class="label">Display</span>
         Unified Dashboard<br>
-        Brightness: <span id="brightnessStatusValue">BRIGHTNESS_VALUE</span>%
+        Brightness: <span id="brightnessStatusValue">BRIGHTNESS_VALUE</span>%<br>
+        Scale: <span id="dashboardScaleStatusValue">DASHBOARD_SCALE_VALUE</span>%<br>
+        Position: <span id="dashboardPositionStatusValue">DASHBOARD_OFFSET_X_VALUE, DASHBOARD_OFFSET_Y_VALUE</span> px
       </div>
       <div class="status">
         <span class="label">Audio Output</span>
@@ -497,7 +552,7 @@ String htmlPage() {
       </div>
     </div>
 
-    <div class="subhead">Screen Brightness</div>
+    <div class="subhead">Display Size and Position</div>
     <div class="control-panel">
       <div class="slider-row">
         <div class="value-row">
@@ -513,6 +568,108 @@ String htmlPage() {
           value="BRIGHTNESS_VALUE"
         >
       </div>
+      <div class="slider-row">
+        <div class="value-row">
+          <span>Dashboard scale</span>
+          <span><span id="dashboardScaleValue">DASHBOARD_SCALE_VALUE</span>%</span>
+        </div>
+        <input
+          id="dashboardScaleSlider"
+          type="range"
+          min="50"
+          max="100"
+          step="1"
+          value="DASHBOARD_SCALE_VALUE"
+        >
+      </div>
+      <div class="slider-row">
+        <div class="value-row">
+          <span>Horizontal position</span>
+          <span><span id="dashboardOffsetXValue">DASHBOARD_OFFSET_X_VALUE</span> px</span>
+        </div>
+        <input
+          id="dashboardOffsetXSlider"
+          type="range"
+          min="0"
+          max="DASHBOARD_OFFSET_X_MAX"
+          step="1"
+          value="DASHBOARD_OFFSET_X_VALUE"
+        >
+      </div>
+      <div class="slider-row">
+        <div class="value-row">
+          <span>Vertical position</span>
+          <span><span id="dashboardOffsetYValue">DASHBOARD_OFFSET_Y_VALUE</span> px</span>
+        </div>
+        <input
+          id="dashboardOffsetYSlider"
+          type="range"
+          min="0"
+          max="DASHBOARD_OFFSET_Y_MAX"
+          step="1"
+          value="DASHBOARD_OFFSET_Y_VALUE"
+        >
+      </div>
+    </div>
+
+    <div class="subhead">Dashboard Colors</div>
+    <div class="control-panel">
+      <div class="color-grid">
+        <label class="color-field">
+          <input type="color" value="#000000" data-dashboard-color="background">
+          <span><span class="label">Background</span><span class="color-value" data-dashboard-color-value="background">#000000</span></span>
+        </label>
+        <label class="color-field">
+          <input type="color" value="#ffffff" data-dashboard-color="primary">
+          <span><span class="label">Gauge / Text</span><span class="color-value" data-dashboard-color-value="primary">#FFFFFF</span></span>
+        </label>
+        <label class="color-field">
+          <input type="color" value="#404040" data-dashboard-color="detail">
+          <span><span class="label">Gauge Detail</span><span class="color-value" data-dashboard-color-value="detail">#404040</span></span>
+        </label>
+        <label class="color-field">
+          <input type="color" value="#ff0000" data-dashboard-color="accent">
+          <span><span class="label">Needle / Bubble</span><span class="color-value" data-dashboard-color-value="accent">#FF0000</span></span>
+        </label>
+        <label class="color-field">
+          <input type="color" value="#ffffff" data-dashboard-color="gear_selected_background">
+          <span><span class="label">Selected Gear BG</span><span class="color-value" data-dashboard-color-value="gear_selected_background">#FFFFFF</span></span>
+        </label>
+        <label class="color-field">
+          <input type="color" value="#000000" data-dashboard-color="gear_selected_text">
+          <span><span class="label">Selected Gear Text</span><span class="color-value" data-dashboard-color-value="gear_selected_text">#000000</span></span>
+        </label>
+        <label class="color-field">
+          <input type="color" value="#6e6e6e" data-dashboard-color="gear_unselected_text">
+          <span><span class="label">Other Gear Text</span><span class="color-value" data-dashboard-color-value="gear_unselected_text">#6E6E6E</span></span>
+        </label>
+        <label class="color-field">
+          <input type="color" value="#20d25a" data-dashboard-color="turn_active">
+          <span><span class="label">Turn Active</span><span class="color-value" data-dashboard-color-value="turn_active">#20D25A</span></span>
+        </label>
+        <label class="color-field">
+          <input type="color" value="#1c3820" data-dashboard-color="turn_inactive">
+          <span><span class="label">Turn Inactive</span><span class="color-value" data-dashboard-color-value="turn_inactive">#1C3820</span></span>
+        </label>
+        <label class="color-field">
+          <input type="color" value="#4090ff" data-dashboard-color="headlight_active">
+          <span><span class="label">Headlight Active</span><span class="color-value" data-dashboard-color-value="headlight_active">#4090FF</span></span>
+        </label>
+        <label class="color-field">
+          <input type="color" value="#203454" data-dashboard-color="headlight_inactive">
+          <span><span class="label">Headlight Inactive</span><span class="color-value" data-dashboard-color-value="headlight_inactive">#203454</span></span>
+        </label>
+        <label class="color-field">
+          <input type="color" value="#ffb134" data-dashboard-color="warning_active">
+          <span><span class="label">Warning Active</span><span class="color-value" data-dashboard-color-value="warning_active">#FFB134</span></span>
+        </label>
+        <label class="color-field">
+          <input type="color" value="#3c341c" data-dashboard-color="warning_inactive">
+          <span><span class="label">Warning Inactive</span><span class="color-value" data-dashboard-color-value="warning_inactive">#3C341C</span></span>
+        </label>
+      </div>
+      <button class="warning" id="restoreDashboardColorsButton" type="button">Restore Default Colors</button>
+      <div class="color-message" id="dashboardColorMessage" aria-live="polite"></div>
     </div>
 
     <div class="subhead">Local Sound</div>
@@ -595,24 +752,48 @@ String htmlPage() {
           CarRadio
         </div>
         <div class="diagnostic">
-          <span class="label">AP Address</span>
-          192.168.4.1
+          <span class="label">Dashboard AP IP</span>
+          <span id="wifiApIpValue">WIFI_AP_IP</span>
         </div>
         <div class="diagnostic">
           <span class="label">Station Status</span>
           <span id="wifiStatusValue">WIFI_STA_STATUS</span>
         </div>
         <div class="diagnostic">
-          <span class="label">Station Address</span>
+          <span class="label">Local WiFi IP</span>
           <span id="wifiIpValue">WIFI_STA_IP</span>
         </div>
         <div class="diagnostic">
-          <span class="label">Station Network</span>
+          <span class="label">Connected Network</span>
+          <span id="wifiNetworkValue">WIFI_STA_NETWORK</span>
+        </div>
+        <div class="diagnostic">
+          <span class="label">Configured Network</span>
           <span id="wifiSsidValue">WIFI_STA_SSID</span>
+        </div>
+        <div class="diagnostic">
+          <span class="label">Connection Error</span>
+          <span id="wifiErrorValue">WIFI_STA_ERROR</span>
         </div>
         <div class="diagnostic">
           <span class="label">Saved Credentials</span>
           <span id="wifiSavedValue">WIFI_STA_SAVED</span>
+        </div>
+        <div class="diagnostic">
+          <span class="label">OrcasMakers Relay</span>
+          <span id="remoteStatusValue">REMOTE_STATUS</span>
+        </div>
+        <div class="diagnostic">
+          <span class="label">Relay Endpoint</span>
+          <span id="remoteServerValue">REMOTE_SERVER</span>
+        </div>
+        <div class="diagnostic">
+          <span class="label">Last Relay Sync</span>
+          <span id="remoteLastSyncValue">REMOTE_LAST_SYNC</span>
+        </div>
+        <div class="diagnostic">
+          <span class="label">Relay Error</span>
+          <span id="remoteErrorValue">REMOTE_ERROR</span>
         </div>
       </div>
       <div class="network-form">
@@ -894,11 +1075,19 @@ String htmlPage() {
     const steeringSlider = document.getElementById('steeringSlider');
     const thresholdSlider = document.getElementById('thresholdSlider');
     const brightnessSlider = document.getElementById('brightnessSlider');
+    const dashboardScaleSlider = document.getElementById('dashboardScaleSlider');
+    const dashboardOffsetXSlider = document.getElementById('dashboardOffsetXSlider');
+    const dashboardOffsetYSlider = document.getElementById('dashboardOffsetYSlider');
     const steeringWheel = document.getElementById('steeringWheel');
     const steeringValue = document.getElementById('steeringValue');
     const thresholdValue = document.getElementById('thresholdValue');
     const brightnessValue = document.getElementById('brightnessValue');
     const brightnessStatusValue = document.getElementById('brightnessStatusValue');
+    const dashboardScaleValue = document.getElementById('dashboardScaleValue');
+    const dashboardScaleStatusValue = document.getElementById('dashboardScaleStatusValue');
+    const dashboardOffsetXValue = document.getElementById('dashboardOffsetXValue');
+    const dashboardOffsetYValue = document.getElementById('dashboardOffsetYValue');
+    const dashboardPositionStatusValue = document.getElementById('dashboardPositionStatusValue');
     const steeringStatusValue = document.getElementById('steeringStatusValue');
     const steeringValidValue = document.getElementById('steeringValidValue');
     const turnSignalValue = document.getElementById('turnSignalValue');
@@ -929,10 +1118,20 @@ String htmlPage() {
     const leftUsInput = document.getElementById('leftUsInput');
     const rightUsInput = document.getElementById('rightUsInput');
     const thresholdInput = document.getElementById('thresholdInput');
+    const dashboardColorInputs = Array.from(document.querySelectorAll('[data-dashboard-color]'));
+    const restoreDashboardColorsButton = document.getElementById('restoreDashboardColorsButton');
+    const dashboardColorMessage = document.getElementById('dashboardColorMessage');
+    const wifiApIpValue = document.getElementById('wifiApIpValue');
     const wifiStatusValue = document.getElementById('wifiStatusValue');
     const wifiIpValue = document.getElementById('wifiIpValue');
+    const wifiNetworkValue = document.getElementById('wifiNetworkValue');
+    const wifiErrorValue = document.getElementById('wifiErrorValue');
     const wifiSsidValue = document.getElementById('wifiSsidValue');
     const wifiSavedValue = document.getElementById('wifiSavedValue');
+    const remoteStatusValue = document.getElementById('remoteStatusValue');
+    const remoteServerValue = document.getElementById('remoteServerValue');
+    const remoteLastSyncValue = document.getElementById('remoteLastSyncValue');
+    const remoteErrorValue = document.getElementById('remoteErrorValue');
     const wifiSsidInput = document.getElementById('wifiSsidInput');
     const wifiPasswordInput = document.getElementById('wifiPasswordInput');
     const wifiScanButton = document.getElementById('wifiScanButton');
@@ -962,6 +1161,22 @@ String htmlPage() {
     let submitTimer = 0;
     let latestLegacyState = null;
     let latestApiState = null;
+    let dashboardColorUpdatePending = false;
+    const defaultDashboardColors = {
+      background: '#000000',
+      primary: '#FFFFFF',
+      detail: '#404040',
+      accent: '#FF0000',
+      gear_selected_background: '#FFFFFF',
+      gear_selected_text: '#000000',
+      gear_unselected_text: '#6E6E6E',
+      turn_active: '#20D25A',
+      turn_inactive: '#1C3820',
+      headlight_active: '#4090FF',
+      headlight_inactive: '#203454',
+      warning_active: '#FFB134',
+      warning_inactive: '#3C341C'
+    };
 
     function formatBytes(bytes) {
       const size = Number(bytes) || 0;
@@ -978,7 +1193,12 @@ String htmlPage() {
       clearTimeout(submitTimer);
       submitTimer = setTimeout(() => {
         const settings = {};
-        if (params.has('brightness')) settings.display = { brightness_percent: Number(params.get('brightness')) };
+        const display = {};
+        if (params.has('brightness')) display.brightness_percent = Number(params.get('brightness'));
+        if (params.has('dashboard_scale')) display.scale_percent = Number(params.get('dashboard_scale'));
+        if (params.has('dashboard_offset_x')) display.offset_x_px = Number(params.get('dashboard_offset_x'));
+        if (params.has('dashboard_offset_y')) display.offset_y_px = Number(params.get('dashboard_offset_y'));
+        if (Object.keys(display).length) settings.display = display;
         if (params.has('center_us') || params.has('left_us') || params.has('right_us') || params.has('turn_threshold')) {
           settings.steering = {
             center_us: Number(params.get('center_us') || centerUsInput.value),
@@ -987,7 +1207,13 @@ String htmlPage() {
             turn_threshold_deg: Number(params.get('turn_threshold') || thresholdInput.value)
           };
         }
-        apiJson('/api/v1/settings', 'POST', settings);
+        apiJson('/api/v1/settings', 'POST', settings)
+          .then(response => {
+            if (!response.ok) throw new Error('Settings update failed');
+            return response.json();
+          })
+          .then(state => applyDisplaySettings(state.display, true))
+          .catch(() => pollSteeringState());
       }, 120);
     }
 
@@ -1013,6 +1239,111 @@ String htmlPage() {
       sendSetUpdate(params);
     }
 
+    function dashboardOffsetMaximum(screenSize, scalePercent) {
+      return screenSize - Math.round(screenSize * scalePercent / 100);
+    }
+
+    function updateDashboardPositionPreview() {
+      dashboardScaleValue.textContent = dashboardScaleSlider.value;
+      dashboardScaleStatusValue.textContent = dashboardScaleSlider.value;
+      dashboardOffsetXValue.textContent = dashboardOffsetXSlider.value;
+      dashboardOffsetYValue.textContent = dashboardOffsetYSlider.value;
+      dashboardPositionStatusValue.textContent = dashboardOffsetXSlider.value + ', ' + dashboardOffsetYSlider.value;
+    }
+
+    function updateDashboardScalePreview() {
+      const oldMaxX = Number(dashboardOffsetXSlider.max);
+      const oldMaxY = Number(dashboardOffsetYSlider.max);
+      const oldOffsetX = Number(dashboardOffsetXSlider.value);
+      const oldOffsetY = Number(dashboardOffsetYSlider.value);
+      const scale = Number(dashboardScaleSlider.value);
+      const newMaxX = dashboardOffsetMaximum(240, scale);
+      const newMaxY = dashboardOffsetMaximum(135, scale);
+      dashboardOffsetXSlider.max = newMaxX;
+      dashboardOffsetYSlider.max = newMaxY;
+      dashboardOffsetXSlider.value = oldMaxX > 0 ? Math.round(oldOffsetX * newMaxX / oldMaxX) : Math.round(newMaxX / 2);
+      dashboardOffsetYSlider.value = oldMaxY > 0 ? Math.round(oldOffsetY * newMaxY / oldMaxY) : Math.round(newMaxY / 2);
+      updateDashboardPositionPreview();
+    }
+
+    function sendDashboardScaleChange() {
+      const params = new URLSearchParams();
+      params.set('dashboard_scale', dashboardScaleSlider.value);
+      sendSetUpdate(params);
+    }
+
+    function sendDashboardOffsetChange() {
+      const params = new URLSearchParams();
+      params.set('dashboard_scale', dashboardScaleSlider.value);
+      params.set('dashboard_offset_x', dashboardOffsetXSlider.value);
+      params.set('dashboard_offset_y', dashboardOffsetYSlider.value);
+      sendSetUpdate(params);
+    }
+
+    function setDashboardColorPreview(input) {
+      const key = input.dataset.dashboardColor;
+      const value = input.value.toUpperCase();
+      const valueElement = document.querySelector('[data-dashboard-color-value="' + key + '"]');
+      if (valueElement) valueElement.textContent = value;
+    }
+
+    function applyDashboardColors(colors, force) {
+      if (!colors || (dashboardColorUpdatePending && !force)) return;
+      dashboardColorInputs.forEach(input => {
+        if (!force && document.activeElement === input) return;
+        const value = colors[input.dataset.dashboardColor];
+        if (!value) return;
+        input.value = value;
+        setDashboardColorPreview(input);
+      });
+    }
+
+    function sendDashboardColorUpdate(colors, successMessage) {
+      dashboardColorUpdatePending = true;
+      restoreDashboardColorsButton.disabled = true;
+      dashboardColorInputs.forEach(input => input.disabled = true);
+      dashboardColorMessage.textContent = 'Saving colors...';
+      apiJson('/api/v1/settings', 'POST', { display: { colors } })
+        .then(response => {
+          if (!response.ok) throw new Error('Color update failed');
+          return response.json();
+        })
+        .then(settings => {
+          applyDisplaySettings(settings.display, true);
+          dashboardColorMessage.textContent = successMessage || 'Dashboard colors saved.';
+        })
+        .catch(() => {
+          dashboardColorMessage.textContent = 'Color update failed; restored saved colors.';
+          pollSteeringState();
+        })
+        .finally(() => {
+          dashboardColorUpdatePending = false;
+          restoreDashboardColorsButton.disabled = false;
+          dashboardColorInputs.forEach(input => input.disabled = false);
+        });
+    }
+
+    function applyDisplaySettings(display, force) {
+      if (!display) return;
+      const displayControls = [
+        brightnessSlider,
+        dashboardScaleSlider,
+        dashboardOffsetXSlider,
+        dashboardOffsetYSlider
+      ];
+      if (!force && displayControls.includes(document.activeElement)) return;
+      brightnessSlider.value = display.brightness_percent;
+      brightnessValue.textContent = display.brightness_percent;
+      brightnessStatusValue.textContent = display.brightness_percent;
+      dashboardScaleSlider.value = display.scale_percent;
+      dashboardOffsetXSlider.max = dashboardOffsetMaximum(240, display.scale_percent);
+      dashboardOffsetYSlider.max = dashboardOffsetMaximum(135, display.scale_percent);
+      dashboardOffsetXSlider.value = display.offset_x_px;
+      dashboardOffsetYSlider.value = display.offset_y_px;
+      updateDashboardPositionPreview();
+      applyDashboardColors(display.colors, force);
+    }
+
     function sendManualCalibrationUpdate() {
       const params = new URLSearchParams();
       params.set('center_us', centerUsInput.value);
@@ -1029,10 +1360,17 @@ String htmlPage() {
     }
 
     function applyWifiState(state) {
+      wifiApIpValue.textContent = state.wifi_ap_ip;
       wifiStatusValue.textContent = state.wifi_sta_status;
       wifiIpValue.textContent = state.wifi_sta_ip;
+      wifiNetworkValue.textContent = state.wifi_sta_network || 'None';
+      wifiErrorValue.textContent = state.wifi_sta_error || 'None';
       wifiSsidValue.textContent = state.wifi_sta_ssid || 'None';
       wifiSavedValue.textContent = state.wifi_sta_saved ? 'Yes' : 'No';
+      remoteStatusValue.textContent = state.remote_status || 'Unavailable';
+      remoteServerValue.textContent = state.remote_server || 'Unavailable';
+      remoteLastSyncValue.textContent = state.remote_last_sync || 'Never';
+      remoteErrorValue.textContent = state.remote_error || 'None';
     }
 
     function applyAudioState(state) {
@@ -1109,7 +1447,11 @@ String htmlPage() {
     function pollSteeringState() {
       fetch('/api/v1/state')
         .then(response => response.json())
-        .then(state => { latestApiState = state; applySteeringState(state.legacy); })
+        .then(state => {
+          latestApiState = state;
+          applySteeringState(state.legacy);
+          applyDisplaySettings(state.settings.display, false);
+        })
         .catch(() => {});
     }
 
@@ -1256,6 +1598,23 @@ String htmlPage() {
     thresholdSlider.addEventListener('change', sendThresholdChange);
     brightnessSlider.addEventListener('input', updateBrightnessPreview);
     brightnessSlider.addEventListener('change', sendBrightnessChange);
+    dashboardScaleSlider.addEventListener('input', updateDashboardScalePreview);
+    dashboardScaleSlider.addEventListener('change', sendDashboardScaleChange);
+    dashboardOffsetXSlider.addEventListener('input', updateDashboardPositionPreview);
+    dashboardOffsetXSlider.addEventListener('change', sendDashboardOffsetChange);
+    dashboardOffsetYSlider.addEventListener('input', updateDashboardPositionPreview);
+    dashboardOffsetYSlider.addEventListener('change', sendDashboardOffsetChange);
+    dashboardColorInputs.forEach(input => {
+      input.addEventListener('input', () => setDashboardColorPreview(input));
+      input.addEventListener('change', () => {
+        const colors = {};
+        colors[input.dataset.dashboardColor] = input.value.toUpperCase();
+        sendDashboardColorUpdate(colors);
+      });
+    });
+    restoreDashboardColorsButton.addEventListener('click', () => {
+      sendDashboardColorUpdate(defaultDashboardColors, 'Default dashboard colors restored.');
+    });
     centerUsInput.addEventListener('change', sendManualCalibrationUpdate);
     leftUsInput.addEventListener('change', sendManualCalibrationUpdate);
     rightUsInput.addEventListener('change', sendManualCalibrationUpdate);
@@ -1327,10 +1686,22 @@ String htmlPage() {
   html.replace("CALIBRATION_STATUS", calibrationStatusValue);
   html.replace("CALIBRATION_VALID", calibrationValidValue);
   html.replace("BRIGHTNESS_VALUE", brightnessValue);
+  html.replace("DASHBOARD_SCALE_VALUE", dashboardScaleValue);
+  html.replace("DASHBOARD_OFFSET_X_VALUE", dashboardOffsetXValue);
+  html.replace("DASHBOARD_OFFSET_Y_VALUE", dashboardOffsetYValue);
+  html.replace("DASHBOARD_OFFSET_X_MAX", dashboardOffsetXMaxValue);
+  html.replace("DASHBOARD_OFFSET_Y_MAX", dashboardOffsetYMaxValue);
+  html.replace("WIFI_AP_IP", wifiApIpValue);
   html.replace("WIFI_STA_STATUS", wifiStaStatusValue);
   html.replace("WIFI_STA_IP", wifiStaIpValue);
+  html.replace("WIFI_STA_NETWORK", wifiStaNetworkValue);
+  html.replace("WIFI_STA_ERROR", wifiStaErrorValue);
   html.replace("WIFI_STA_SSID", wifiStaSsidValue);
   html.replace("WIFI_STA_SAVED", wifiStaSavedValue);
+  html.replace("REMOTE_STATUS", remoteStatusValue);
+  html.replace("REMOTE_SERVER", remoteServerValue);
+  html.replace("REMOTE_LAST_SYNC", remoteLastSyncValue);
+  html.replace("REMOTE_ERROR", remoteErrorValue);
   html.replace("AUDIO_OUTPUT_STATUS", audioOutputStatusValue);
   html.replace("AUDIO_OUTPUT_PINS", audioOutputPinsValue);
   html.replace("AUDIO_STORAGE_STATUS", audioStorageStatusValue);
@@ -1387,6 +1758,9 @@ String controllerStateJson() {
   json += vehicleControl.armed ? "true" : "false";
   json += ",\"mode\":\"";
   json += vehicleControlModeValue();
+  json += "\"";
+  json += ",\"owner\":\"";
+  json += vehicleControlOwnerValue();
   json += "\"";
   json += ",\"status\":\"";
   json += jsonEscape(vehicleControlStatusLabel());
@@ -1474,6 +1848,10 @@ void handleControllerCommand(AsyncWebServerRequest *request) {
     sendControllerError(request, 409, "Controller is not armed");
     return;
   }
+  if (vehicleControlOwner != VehicleControlOwner::Local) {
+    sendControllerError(request, 409, "The remote controller owns vehicle control");
+    return;
+  }
   if (!requestHasArg(request, "steering") || !requestHasArg(request, "throttle")) {
     sendControllerError(request, 400, "steering and throttle are required");
     return;
@@ -1494,6 +1872,7 @@ void handleControllerCommand(AsyncWebServerRequest *request) {
 }
 
 void handleControllerStop(AsyncWebServerRequest *request) {
+  latchRemoteStopFromLocal();
   stopVehicleControl(false);
   request->send(200, "application/json", controllerStateJson());
 }
@@ -1958,11 +2337,20 @@ String stateJson() {
   );
   json += ",\"brightness\":";
   json += String(screenBrightnessPercent);
+  json += ",\"wifi_ap_ip\":\"";
+  json += jsonEscape(WiFi.softAPIP().toString());
+  json += "\"";
   json += ",\"wifi_sta_status\":\"";
   json += jsonEscape(wifiStationStatusLabel());
   json += "\"";
   json += ",\"wifi_sta_ip\":\"";
   json += jsonEscape(wifiStationIpLabel());
+  json += "\"";
+  json += ",\"wifi_sta_network\":\"";
+  json += jsonEscape(wifiStationNetworkLabel());
+  json += "\"";
+  json += ",\"wifi_sta_error\":\"";
+  json += jsonEscape(wifiStationErrorLabel());
   json += "\"";
   json += ",\"wifi_sta_ssid\":\"";
   json += jsonEscape(wifiStaSsid);
@@ -1973,6 +2361,15 @@ String stateJson() {
   } else {
     json += "false";
   }
+  json += ",\"remote_status\":\"";
+  json += jsonEscape(remoteStatusLabel());
+  json += "\",\"remote_server\":\"";
+  json += jsonEscape(remoteServerLabel());
+  json += "\",\"remote_last_sync\":\"";
+  json += jsonEscape(remoteLastSyncLabel());
+  json += "\",\"remote_error\":\"";
+  json += jsonEscape(remoteErrorLabel());
+  json += "\"";
   json += ",\"audio_output_started\":";
   if (speakerI2sStarted()) {
     json += "true";

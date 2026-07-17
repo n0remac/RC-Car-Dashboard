@@ -212,10 +212,11 @@ components:
         throttle: {type: integer, minimum: -100, maximum: 100}
     Control:
       type: object
-      required: [armed, mode, steering, throttle, watchdog_timeout_ms, session_id, last_sequence]
+      required: [armed, mode, owner, steering, throttle, watchdog_timeout_ms, session_id, last_sequence]
       properties:
         armed: {type: boolean}
         mode: {type: string, enum: [receiver, web]}
+        owner: {type: string, enum: [none, local, remote]}
         status: {type: string}
         steering: {type: integer, minimum: -100, maximum: 100}
         throttle: {type: integer, minimum: -100, maximum: 100}
@@ -239,18 +240,104 @@ components:
       type: object
       required: [display, steering, tilt, speed]
       properties:
-        display: {type: object, additionalProperties: true}
+        display: {$ref: '#/components/schemas/DisplaySettings'}
         steering: {type: object, additionalProperties: true}
         tilt: {type: object, additionalProperties: true}
         speed: {type: object, additionalProperties: true}
+    DisplaySettings:
+      type: object
+      additionalProperties: false
+      required: [brightness_percent, scale_percent, offset_x_px, offset_y_px, colors]
+      properties:
+        brightness_percent: {type: integer, minimum: 5, maximum: 100}
+        scale_percent: {type: integer, minimum: 50, maximum: 100}
+        offset_x_px:
+          type: integer
+          minimum: 0
+          description: Top-left X coordinate; the maximum is 240 minus the scaled dashboard width.
+        offset_y_px:
+          type: integer
+          minimum: 0
+          description: Top-left Y coordinate; the maximum is 135 minus the scaled dashboard height.
+        colors: {$ref: '#/components/schemas/DashboardColors'}
+    HexColor:
+      type: string
+      pattern: '^#[0-9A-Fa-f]{6}$'
+      example: '#FFFFFF'
+      description: A 24-bit RGB color. Responses use uppercase hexadecimal digits.
+    DashboardColors:
+      type: object
+      additionalProperties: false
+      required:
+        - background
+        - primary
+        - detail
+        - accent
+        - gear_selected_background
+        - gear_selected_text
+        - gear_unselected_text
+        - turn_active
+        - turn_inactive
+        - headlight_active
+        - headlight_inactive
+        - warning_active
+        - warning_inactive
+      properties:
+        background: {$ref: '#/components/schemas/HexColor'}
+        primary: {$ref: '#/components/schemas/HexColor'}
+        detail: {$ref: '#/components/schemas/HexColor'}
+        accent: {$ref: '#/components/schemas/HexColor'}
+        gear_selected_background: {$ref: '#/components/schemas/HexColor'}
+        gear_selected_text: {$ref: '#/components/schemas/HexColor'}
+        gear_unselected_text: {$ref: '#/components/schemas/HexColor'}
+        turn_active: {$ref: '#/components/schemas/HexColor'}
+        turn_inactive: {$ref: '#/components/schemas/HexColor'}
+        headlight_active: {$ref: '#/components/schemas/HexColor'}
+        headlight_inactive: {$ref: '#/components/schemas/HexColor'}
+        warning_active: {$ref: '#/components/schemas/HexColor'}
+        warning_inactive: {$ref: '#/components/schemas/HexColor'}
+    DashboardColorsPatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        background: {$ref: '#/components/schemas/HexColor'}
+        primary: {$ref: '#/components/schemas/HexColor'}
+        detail: {$ref: '#/components/schemas/HexColor'}
+        accent: {$ref: '#/components/schemas/HexColor'}
+        gear_selected_background: {$ref: '#/components/schemas/HexColor'}
+        gear_selected_text: {$ref: '#/components/schemas/HexColor'}
+        gear_unselected_text: {$ref: '#/components/schemas/HexColor'}
+        turn_active: {$ref: '#/components/schemas/HexColor'}
+        turn_inactive: {$ref: '#/components/schemas/HexColor'}
+        headlight_active: {$ref: '#/components/schemas/HexColor'}
+        headlight_inactive: {$ref: '#/components/schemas/HexColor'}
+        warning_active: {$ref: '#/components/schemas/HexColor'}
+        warning_inactive: {$ref: '#/components/schemas/HexColor'}
     SettingsPatch:
       type: object
       additionalProperties: false
       properties:
         display:
           type: object
+          additionalProperties: false
+          minProperties: 1
           properties:
             brightness_percent: {type: integer, minimum: 5, maximum: 100}
+            scale_percent:
+              type: integer
+              minimum: 50
+              maximum: 100
+              description: When offsets are omitted, their relative placement is preserved for the new scale.
+            offset_x_px:
+              type: integer
+              minimum: 0
+              description: Must be no greater than 240 minus the width at the resulting scale.
+            offset_y_px:
+              type: integer
+              minimum: 0
+              description: Must be no greater than 135 minus the height at the resulting scale.
+            colors: {$ref: '#/components/schemas/DashboardColorsPatch'}
         steering:
           type: object
           properties:
@@ -277,7 +364,7 @@ components:
             reset_speed_fusion: {type: boolean}
     State:
       type: object
-      required: [device, control, sensors, inputs, dashboard, audio, network, settings]
+      required: [device, control, sensors, inputs, dashboard, audio, network, remote, settings]
       properties:
         device: {type: object, additionalProperties: true}
         control: {$ref: '#/components/schemas/Control'}
@@ -286,12 +373,27 @@ components:
         dashboard: {type: object, additionalProperties: true}
         audio: {type: object, additionalProperties: true}
         network: {type: object, additionalProperties: true}
+        remote: {$ref: '#/components/schemas/Remote'}
         settings: {$ref: '#/components/schemas/Settings'}
         legacy:
           type: object
           deprecated: true
           description: Temporary flat view consumed by the embedded diagnostics page.
           additionalProperties: true
+    Remote:
+      type: object
+      required: [enabled, configured, connected, server, device_id, last_sync_age_ms, last_http_status, remote_armed, generation, error]
+      properties:
+        enabled: {type: boolean}
+        configured: {type: boolean}
+        connected: {type: boolean}
+        server: {type: string}
+        device_id: {type: string}
+        last_sync_age_ms: {type: [integer, 'null']}
+        last_http_status: {type: integer}
+        remote_armed: {type: boolean}
+        generation: {type: [integer, 'null']}
+        error: {type: string}
     WifiNetwork:
       type: object
       required: [ssid, rssi, channel, secure]

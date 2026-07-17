@@ -1,5 +1,6 @@
 #include <FS.h>
 #include <WiFi.h>
+#include <HTTPClient.h>
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
 #include <ArduinoJson.h>
@@ -31,6 +32,8 @@ const char *WIFI_PREF_NAMESPACE = "wifi_sta";
 String wifiStaSsid = "";
 String wifiStaPassword = "";
 bool wifiStaCredentialsSaved = false;
+unsigned long wifiStaConnectStartedMs = 0;
+static const unsigned long WIFI_STA_CONNECT_TIMEOUT_MS = 15000UL;
 
 // ----------------------
 // Screen config
@@ -41,9 +44,50 @@ static const int SCREEN_BACKLIGHT_PIN = 4;
 static const int SCREEN_BRIGHTNESS_MIN_PERCENT = 5;
 static const int SCREEN_BRIGHTNESS_MAX_PERCENT = 100;
 static const int SCREEN_BRIGHTNESS_DEFAULT_PERCENT = 5;
+static const int DASHBOARD_SCALE_MIN_PERCENT = 50;
+static const int DASHBOARD_SCALE_MAX_PERCENT = 100;
+static const int DASHBOARD_SCALE_DEFAULT_PERCENT = 100;
+
+struct DashboardColors {
+  uint32_t background;
+  uint32_t primary;
+  uint32_t detail;
+  uint32_t accent;
+  uint32_t gearSelectedBackground;
+  uint32_t gearSelectedText;
+  uint32_t gearUnselectedText;
+  uint32_t turnActive;
+  uint32_t turnInactive;
+  uint32_t headlightActive;
+  uint32_t headlightInactive;
+  uint32_t warningActive;
+  uint32_t warningInactive;
+};
+
+static const DashboardColors DASHBOARD_COLOR_DEFAULTS = {
+  0x000000,
+  0xFFFFFF,
+  0x404040,
+  0xFF0000,
+  0xFFFFFF,
+  0x000000,
+  0x6E6E6E,
+  0x20D25A,
+  0x1C3820,
+  0x4090FF,
+  0x203454,
+  0xFFB134,
+  0x3C341C
+};
 
 int screenBrightnessPercent = SCREEN_BRIGHTNESS_DEFAULT_PERCENT;
+int dashboardScalePercent = DASHBOARD_SCALE_DEFAULT_PERCENT;
+int dashboardOffsetX = 0;
+int dashboardOffsetY = 0;
+DashboardColors dashboardColors = DASHBOARD_COLOR_DEFAULTS;
 bool screenSpriteAvailable = false;
+bool dashboardTransformDirty = true;
+uint8_t dashboardScaledRow[SCREEN_W];
 
 // ----------------------
 // IMU / I2C config
@@ -277,6 +321,12 @@ enum class VehicleControlMode : uint8_t {
   Web
 };
 
+enum class VehicleControlOwner : uint8_t {
+  None,
+  Local,
+  Remote
+};
+
 struct VehicleControlState {
   VehicleControlMode mode;
   bool pwmReady;
@@ -300,6 +350,8 @@ VehicleControlState vehicleControl = {
   THROTTLE_OFF_US,
   0
 };
+
+VehicleControlOwner vehicleControlOwner = VehicleControlOwner::None;
 
 String apiControlSessionId = "";
 uint32_t apiControlLastSequence = 0;
@@ -442,6 +494,11 @@ void saveScreenBrightness();
 void saveDashboardSettings();
 void applyScreenBrightness();
 void setScreenBrightnessPercent(int brightnessPercent);
+int dashboardScaledWidth(int scalePercent);
+int dashboardScaledHeight(int scalePercent);
+int dashboardMaxOffsetX(int scalePercent);
+int dashboardMaxOffsetY(int scalePercent);
+void applyDashboardDisplayTransform(int scalePercent, int offsetX, int offsetY);
 void initWifi();
 void loadWifiStationCredentials();
 void saveWifiStationCredentials(const String &ssid, const String &password);
@@ -449,6 +506,8 @@ void clearWifiStationCredentials();
 void beginWifiStation();
 String wifiStationStatusLabel();
 String wifiStationIpLabel();
+String wifiStationNetworkLabel();
+String wifiStationErrorLabel();
 void applyTiltOrientation();
 void resetTiltReference();
 void initRcPulseInput(RcPulseInput &input);
@@ -478,11 +537,13 @@ void releaseVehiclePwmOutputs();
 void handleSteeringReceiverInputChange();
 void handleThrottleReceiverInputChange();
 bool armVehicleControl();
+bool armVehicleControlForOwner(VehicleControlOwner owner);
 void stopVehicleControl(bool watchdogStop = false);
 void setVehicleControlCommand(int steeringPercent, int throttlePercent);
 void updateVehicleControlWatchdog();
 unsigned long vehicleControlHeartbeatAgeMs();
 const char *vehicleControlModeValue();
+const char *vehicleControlOwnerValue();
 String vehicleControlStatusLabel();
 unsigned long steeringPulseForPercent(int steeringPercent);
 unsigned long throttlePulseForPercent(int throttlePercent);
@@ -517,6 +578,14 @@ void handleControllerCommand(AsyncWebServerRequest *request);
 void handleControllerStop(AsyncWebServerRequest *request);
 void registerApiRoutes();
 void updateApiEvents();
+void initRemoteConnection();
+void updateRemoteConnection();
+void latchRemoteStopFromLocal();
+String apiRemoteJson();
+String remoteServerLabel();
+String remoteStatusLabel();
+String remoteLastSyncLabel();
+String remoteErrorLabel();
 typedef std::function<void(AsyncWebServerRequest *, JsonVariant &)> ApiJsonHandler;
 void registerApiJsonPost(const char *path, ApiJsonHandler handler);
 void sendApiError(AsyncWebServerRequest *request, int code, const char *error, const String &message);
@@ -526,6 +595,8 @@ String bmeAddressLabel();
 String tiltOrientationName();
 String onOffLabel(bool enabled);
 uint16_t rgb565(uint8_t r, uint8_t g, uint8_t b);
+uint16_t dashboardColor565(uint32_t color);
+String dashboardColorHex(uint32_t color);
 
 // ----------------------
 // Helpers
@@ -575,6 +646,20 @@ int clampInt(int value, int minValue, int maxValue) {
 
 uint16_t rgb565(uint8_t r, uint8_t g, uint8_t b) {
   return ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
+}
+
+uint16_t dashboardColor565(uint32_t color) {
+  return rgb565(
+    (uint8_t)((color >> 16) & 0xFF),
+    (uint8_t)((color >> 8) & 0xFF),
+    (uint8_t)(color & 0xFF)
+  );
+}
+
+String dashboardColorHex(uint32_t color) {
+  char value[8];
+  snprintf(value, sizeof(value), "#%06lX", (unsigned long)(color & 0xFFFFFFUL));
+  return String(value);
 }
 
 void swapImuHorizontalAxes(float &xValue, float &yValue) {
@@ -734,6 +819,35 @@ void loadScreenBrightness() {
     SCREEN_BRIGHTNESS_MIN_PERCENT,
     SCREEN_BRIGHTNESS_MAX_PERCENT
   );
+  dashboardScalePercent = clampInt(
+    dashboardPreferences.getInt("scale_pct", DASHBOARD_SCALE_DEFAULT_PERCENT),
+    DASHBOARD_SCALE_MIN_PERCENT,
+    DASHBOARD_SCALE_MAX_PERCENT
+  );
+  dashboardOffsetX = clampInt(
+    dashboardPreferences.getInt("offset_x", 0),
+    0,
+    dashboardMaxOffsetX(dashboardScalePercent)
+  );
+  dashboardOffsetY = clampInt(
+    dashboardPreferences.getInt("offset_y", 0),
+    0,
+    dashboardMaxOffsetY(dashboardScalePercent)
+  );
+  dashboardColors.background = dashboardPreferences.getUInt("clr_bg", DASHBOARD_COLOR_DEFAULTS.background) & 0xFFFFFFUL;
+  dashboardColors.primary = dashboardPreferences.getUInt("clr_primary", DASHBOARD_COLOR_DEFAULTS.primary) & 0xFFFFFFUL;
+  dashboardColors.detail = dashboardPreferences.getUInt("clr_detail", DASHBOARD_COLOR_DEFAULTS.detail) & 0xFFFFFFUL;
+  dashboardColors.accent = dashboardPreferences.getUInt("clr_accent", DASHBOARD_COLOR_DEFAULTS.accent) & 0xFFFFFFUL;
+  dashboardColors.gearSelectedBackground = dashboardPreferences.getUInt("clr_gsel_bg", DASHBOARD_COLOR_DEFAULTS.gearSelectedBackground) & 0xFFFFFFUL;
+  dashboardColors.gearSelectedText = dashboardPreferences.getUInt("clr_gsel_txt", DASHBOARD_COLOR_DEFAULTS.gearSelectedText) & 0xFFFFFFUL;
+  dashboardColors.gearUnselectedText = dashboardPreferences.getUInt("clr_gmute", DASHBOARD_COLOR_DEFAULTS.gearUnselectedText) & 0xFFFFFFUL;
+  dashboardColors.turnActive = dashboardPreferences.getUInt("clr_turn_on", DASHBOARD_COLOR_DEFAULTS.turnActive) & 0xFFFFFFUL;
+  dashboardColors.turnInactive = dashboardPreferences.getUInt("clr_turn_off", DASHBOARD_COLOR_DEFAULTS.turnInactive) & 0xFFFFFFUL;
+  dashboardColors.headlightActive = dashboardPreferences.getUInt("clr_light_on", DASHBOARD_COLOR_DEFAULTS.headlightActive) & 0xFFFFFFUL;
+  dashboardColors.headlightInactive = dashboardPreferences.getUInt("clr_light_off", DASHBOARD_COLOR_DEFAULTS.headlightInactive) & 0xFFFFFFUL;
+  dashboardColors.warningActive = dashboardPreferences.getUInt("clr_warn_on", DASHBOARD_COLOR_DEFAULTS.warningActive) & 0xFFFFFFUL;
+  dashboardColors.warningInactive = dashboardPreferences.getUInt("clr_warn_off", DASHBOARD_COLOR_DEFAULTS.warningInactive) & 0xFFFFFFUL;
+  dashboardTransformDirty = true;
   tiltOrientationDeg = dashboardPreferences.getInt("tilt_rotation", tiltOrientationDeg);
   if (tiltOrientationDeg != 0 && tiltOrientationDeg != 90 &&
       tiltOrientationDeg != 180 && tiltOrientationDeg != 270) {
@@ -754,8 +868,31 @@ void saveScreenBrightness() {
   dashboardPreferences.putInt("brightness", screenBrightnessPercent);
 }
 
+void saveDashboardColorIfChanged(const char *key, uint32_t color) {
+  uint32_t normalized = color & 0xFFFFFFUL;
+  if (dashboardPreferences.getUInt(key, 0xFFFFFFFFUL) != normalized) {
+    dashboardPreferences.putUInt(key, normalized);
+  }
+}
+
 void saveDashboardSettings() {
   dashboardPreferences.putInt("brightness", screenBrightnessPercent);
+  dashboardPreferences.putInt("scale_pct", dashboardScalePercent);
+  dashboardPreferences.putInt("offset_x", dashboardOffsetX);
+  dashboardPreferences.putInt("offset_y", dashboardOffsetY);
+  saveDashboardColorIfChanged("clr_bg", dashboardColors.background);
+  saveDashboardColorIfChanged("clr_primary", dashboardColors.primary);
+  saveDashboardColorIfChanged("clr_detail", dashboardColors.detail);
+  saveDashboardColorIfChanged("clr_accent", dashboardColors.accent);
+  saveDashboardColorIfChanged("clr_gsel_bg", dashboardColors.gearSelectedBackground);
+  saveDashboardColorIfChanged("clr_gsel_txt", dashboardColors.gearSelectedText);
+  saveDashboardColorIfChanged("clr_gmute", dashboardColors.gearUnselectedText);
+  saveDashboardColorIfChanged("clr_turn_on", dashboardColors.turnActive);
+  saveDashboardColorIfChanged("clr_turn_off", dashboardColors.turnInactive);
+  saveDashboardColorIfChanged("clr_light_on", dashboardColors.headlightActive);
+  saveDashboardColorIfChanged("clr_light_off", dashboardColors.headlightInactive);
+  saveDashboardColorIfChanged("clr_warn_on", dashboardColors.warningActive);
+  saveDashboardColorIfChanged("clr_warn_off", dashboardColors.warningInactive);
   dashboardPreferences.putInt("tilt_rotation", tiltOrientationDeg);
   dashboardPreferences.putBool("invert_pitch", invertPitchAxis);
   dashboardPreferences.putBool("invert_roll", invertRollAxis);
@@ -785,6 +922,43 @@ void setScreenBrightnessPercent(int brightnessPercent) {
   saveScreenBrightness();
 }
 
+int dashboardScaledWidth(int scalePercent) {
+  return ((SCREEN_W * scalePercent) + 50) / 100;
+}
+
+int dashboardScaledHeight(int scalePercent) {
+  return ((SCREEN_H * scalePercent) + 50) / 100;
+}
+
+int dashboardMaxOffsetX(int scalePercent) {
+  return SCREEN_W - dashboardScaledWidth(scalePercent);
+}
+
+int dashboardMaxOffsetY(int scalePercent) {
+  return SCREEN_H - dashboardScaledHeight(scalePercent);
+}
+
+void applyDashboardDisplayTransform(int scalePercent, int offsetX, int offsetY) {
+  int nextScale = clampInt(
+    scalePercent,
+    DASHBOARD_SCALE_MIN_PERCENT,
+    DASHBOARD_SCALE_MAX_PERCENT
+  );
+  int nextOffsetX = clampInt(offsetX, 0, dashboardMaxOffsetX(nextScale));
+  int nextOffsetY = clampInt(offsetY, 0, dashboardMaxOffsetY(nextScale));
+
+  if (nextScale == dashboardScalePercent &&
+      nextOffsetX == dashboardOffsetX &&
+      nextOffsetY == dashboardOffsetY) {
+    return;
+  }
+
+  dashboardScalePercent = nextScale;
+  dashboardOffsetX = nextOffsetX;
+  dashboardOffsetY = nextOffsetY;
+  dashboardTransformDirty = true;
+}
+
 void loadWifiStationCredentials() {
   wifiPreferences.begin(WIFI_PREF_NAMESPACE, false);
   wifiStaSsid = wifiPreferences.getString("ssid", "");
@@ -804,6 +978,7 @@ void clearWifiStationCredentials() {
   wifiStaSsid = "";
   wifiStaPassword = "";
   wifiStaCredentialsSaved = false;
+  wifiStaConnectStartedMs = 0;
   wifiPreferences.remove("ssid");
   wifiPreferences.remove("password");
 }
@@ -814,6 +989,10 @@ void beginWifiStation() {
   }
 
   WiFi.begin(wifiStaSsid.c_str(), wifiStaPassword.c_str());
+  wifiStaConnectStartedMs = millis();
+  if (wifiStaConnectStartedMs == 0) {
+    wifiStaConnectStartedMs = 1;
+  }
   Serial.print("Connecting station WiFi to ");
   Serial.println(wifiStaSsid);
 }
@@ -834,6 +1013,7 @@ void initWifi() {
 String wifiStationStatusLabel() {
   wl_status_t status = WiFi.status();
   if (status == WL_CONNECTED) {
+    wifiStaConnectStartedMs = 0;
     return "Connected";
   }
   if (status == WL_CONNECT_FAILED) {
@@ -843,6 +1023,10 @@ String wifiStationStatusLabel() {
     return "Connection lost";
   }
   if (status == WL_DISCONNECTED) {
+    if (wifiStaCredentialsSaved && wifiStaConnectStartedMs != 0 &&
+        (millis() - wifiStaConnectStartedMs) < WIFI_STA_CONNECT_TIMEOUT_MS) {
+      return "Connecting";
+    }
     return wifiStaCredentialsSaved ? String("Disconnected") : String("Not configured");
   }
   if (status == WL_IDLE_STATUS) {
@@ -860,6 +1044,37 @@ String wifiStationIpLabel() {
     return WiFi.localIP().toString();
   }
   return "Unavailable";
+}
+
+String wifiStationNetworkLabel() {
+  if (WiFi.status() == WL_CONNECTED) {
+    return WiFi.SSID();
+  }
+  return "None";
+}
+
+String wifiStationErrorLabel() {
+  wl_status_t status = WiFi.status();
+  if (!wifiStaCredentialsSaved || status == WL_CONNECTED || status == WL_IDLE_STATUS) {
+    return "None";
+  }
+  if (status == WL_NO_SSID_AVAIL) {
+    return "Saved network was not found.";
+  }
+  if (status == WL_CONNECT_FAILED) {
+    return "Connection rejected. Check the WiFi password.";
+  }
+  if (status == WL_CONNECTION_LOST) {
+    return "Connection to the WiFi network was lost.";
+  }
+  if (status == WL_DISCONNECTED) {
+    if (wifiStaConnectStartedMs != 0 &&
+        (millis() - wifiStaConnectStartedMs) < WIFI_STA_CONNECT_TIMEOUT_MS) {
+      return "None";
+    }
+    return "Unable to connect. Check the password and signal strength.";
+  }
+  return "Unknown WiFi connection error.";
 }
 
 void initRcPulseInput(RcPulseInput &input) {
@@ -1408,6 +1623,7 @@ void enableReceiverControl() {
   resetThrottleGearState();
   vehicleControl.mode = VehicleControlMode::Receiver;
   vehicleControl.armed = false;
+  vehicleControlOwner = VehicleControlOwner::None;
   vehicleControl.lastHeartbeatMs = 0;
   vehicleControl.steeringPercent = 0;
   vehicleControl.throttlePercent = 0;
@@ -1502,6 +1718,16 @@ void initVehicleControl() {
 }
 
 bool armVehicleControl() {
+  return armVehicleControlForOwner(VehicleControlOwner::Local);
+}
+
+bool armVehicleControlForOwner(VehicleControlOwner owner) {
+  if (owner == VehicleControlOwner::None) {
+    return false;
+  }
+  if (vehicleControl.armed && vehicleControlOwner != owner) {
+    return false;
+  }
   if (!steeringCalibrationValid()) {
     return false;
   }
@@ -1513,6 +1739,7 @@ bool armVehicleControl() {
   }
 
   vehicleControl.armed = true;
+  vehicleControlOwner = owner;
   vehicleControl.watchdogStopped = false;
   setVehicleControlCommand(0, 0);
   vehicleControl.lastHeartbeatMs = millis();
@@ -1552,6 +1779,18 @@ const char *vehicleControlModeValue() {
   return vehicleControl.mode == VehicleControlMode::Web ? "web" : "receiver";
 }
 
+const char *vehicleControlOwnerValue() {
+  switch (vehicleControlOwner) {
+    case VehicleControlOwner::Local:
+      return "local";
+    case VehicleControlOwner::Remote:
+      return "remote";
+    case VehicleControlOwner::None:
+    default:
+      return "none";
+  }
+}
+
 String vehicleControlStatusLabel() {
   if (vehicleControl.mode == VehicleControlMode::Receiver) {
     return steeringReceiverInput.filteredPulseFresh ||
@@ -1566,7 +1805,8 @@ String vehicleControlStatusLabel() {
     return "Calibration invalid";
   }
   if (vehicleControl.armed) {
-    return "Web control armed";
+    return vehicleControlOwner == VehicleControlOwner::Remote ?
+      "Remote control armed" : "Local web control armed";
   }
   return "Web control ready";
 }
@@ -1796,7 +2036,38 @@ void renderCurrentScreen() {
   }
 
   renderGaugeScreen(spr);
-  spr.pushSprite(0, 0);
+  if (dashboardTransformDirty) {
+    tft.fillScreen(TFT_BLACK);
+    dashboardTransformDirty = false;
+  }
+
+  if (dashboardScalePercent == DASHBOARD_SCALE_MAX_PERCENT) {
+    spr.pushSprite(0, 0);
+    return;
+  }
+
+  int scaledWidth = dashboardScaledWidth(dashboardScalePercent);
+  int scaledHeight = dashboardScaledHeight(dashboardScalePercent);
+  uint8_t *source = static_cast<uint8_t *>(spr.getPointer());
+
+  tft.startWrite();
+  for (int destinationY = 0; destinationY < scaledHeight; ++destinationY) {
+    int sourceY = (destinationY * SCREEN_H) / scaledHeight;
+    int sourceRow = sourceY * SCREEN_W;
+    for (int destinationX = 0; destinationX < scaledWidth; ++destinationX) {
+      int sourceX = (destinationX * SCREEN_W) / scaledWidth;
+      dashboardScaledRow[destinationX] = source[sourceRow + sourceX];
+    }
+    tft.pushImage(
+      dashboardOffsetX,
+      dashboardOffsetY + destinationY,
+      scaledWidth,
+      1,
+      dashboardScaledRow,
+      true
+    );
+  }
+  tft.endWrite();
 }
 
 // ----------------------
@@ -1839,6 +2110,7 @@ void setup() {
   }
 
   initWifi();
+  initRemoteConnection();
 
   Wire.begin(SDA_PIN, SCL_PIN);
 
@@ -1873,6 +2145,7 @@ void loop() {
   updateSoundSwitchInput();
   updateHornPlayback();
   updateVehicleControlWatchdog();
+  updateRemoteConnection();
   updateVehicleControlDashboard();
   updateTurnSignalOutputs();
   updateApiEvents();

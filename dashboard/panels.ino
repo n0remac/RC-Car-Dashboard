@@ -331,21 +331,21 @@ void renderGaugeScreen(TFT_eSprite &s) {
   int offsetY = 10;
 
   bool lowFuelActive = dashboardFuelLevel <= 0.2f;
-  drawFuelGauge(s, 20 + offsetX, 40 + offsetY, 17, dashboardFuelLevel);
-  drawHeadlightIndicator(s, 0 + offsetX, 62 + offsetY, dashboardHeadlightsOn);
+  drawFuelGauge(s, 20 + offsetX, 60 + offsetY, 17, dashboardFuelLevel);
+  drawHeadlightIndicator(s, 0 + offsetX, 78 + offsetY, dashboardHeadlightsOn);
 
-  drawTurnSignal(s, 85 + offsetX, 62 + offsetY, true, leftTurnSignalFlashing());
-  drawTurnSignal(s, 132 + offsetX, 62 + offsetY, false, rightTurnSignalFlashing());
+  drawTurnSignal(s, 85 + offsetX, 92 + offsetY, true, leftTurnSignalFlashing());
+  drawTurnSignal(s, 132 + offsetX, 92 + offsetY, false, rightTurnSignalFlashing());
   drawGearColumn(s, 118 + offsetX, 74 + offsetY, dashboardGearIndex);
 
-  drawTiltWidget(s, 146 + offsetX, 40 + offsetY, 17, false, pitchDeg);
-  drawTiltWidget(s, 179 + offsetX, 40 + offsetY, 17, true, rollDeg);
+  drawTiltWidget(s, 92 + offsetX, 70 + offsetY, 17, false, pitchDeg);
+  drawTiltWidget(s, 143 + offsetX, 70 + offsetY, 17, true, rollDeg);
 
   drawTallCircularGauge(
     s,
     50 + offsetX,
     110 + offsetY,
-    45,
+    35,
     0.0f,
     8.0f,
     dashboardRpmK,
@@ -355,14 +355,14 @@ void renderGaugeScreen(TFT_eSprite &s) {
     s,
     185 + offsetX,
     110 + offsetY,
-    45,
+    35,
     0.0f,
     80.0f,
     dashboardMph,
     "MPH"
   );
 
-  drawTemperatureGauge(s, 217 + offsetX, 40 + offsetY, 17, environmentTempC, bmeAvailable);
+  drawTemperatureGauge(s, 217 + offsetX, 60 + offsetY, 17, environmentTempC, bmeAvailable);
   // drawOdometer(s, 25 + offsetX, 118 + offsetY, dashboardOdometer);
   drawLowFuelIndicator(s, 195 + offsetX, 115 + offsetY, lowFuelActive);
 }

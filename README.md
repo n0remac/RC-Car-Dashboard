@@ -15,7 +15,7 @@ The production sketch is [`dashboard/dashboard.ino`](dashboard/dashboard.ino). A
 - Separate touch/pointer driving controller at `/controller`
 - AP mode plus optional saved station Wi-Fi credentials
 - LittleFS WAV upload/playback and a low-latency synthesized horn through I2S
-- Preferences-backed brightness, calibration, orientation, and Wi-Fi settings
+- Preferences-backed dashboard colors, scale/position, brightness, calibration, orientation, and Wi-Fi settings
 
 ## Quick start
 
@@ -39,7 +39,7 @@ The main sketch uses the ESP32 Arduino core and these libraries:
 - `arduino-audio-tools` (`AudioTools.h`)
 - `ESPAsyncWebServer` 3.11 or newer and the maintained ESP32Async `AsyncTCP` 3.4 or newer
 - `ArduinoJson`
-- ESP32 core facilities: WiFi, Preferences, LittleFS, HardwareSerial, LEDC, and FreeRTOS
+- ESP32 core facilities: WiFi, HTTPClient, Preferences, LittleFS, HardwareSerial, LEDC, and FreeRTOS
 
 There is no checked-in board manifest or lockfile, so compatible library versions must currently be selected in the local Arduino environment.
 
@@ -68,6 +68,27 @@ Web driving is ordinary HTTP, not WebSockets:
 
 See [PROJECT.md](PROJECT.md) for message formats, pulse mappings, sensor details, routes, and file-by-file architecture.
 
+## OrcasMakers remote relay
+
+When station Wi-Fi is connected, `dashboard/remote.ino` can publish compact telemetry and receive commands through `POST http://165.227.55.254:8081/api/car/device/sync`. Outbound syncing is disabled until a device token is supplied at build time; no secret is committed to this repository.
+
+Define these macros in the build configuration as needed:
+
+```text
+CAR_REMOTE_DEVICE_TOKEN="a-long-random-shared-secret"
+CAR_REMOTE_DEVICE_ID="car-dashboard-01"
+CAR_REMOTE_SYNC_URL="http://165.227.55.254:8081/api/car/device/sync"
+CAR_REMOTE_ENABLED=1
+```
+
+The relay body follows OrcasMakers protocol version 1: a flat telemetry object using km/h, Celsius, hPa, metres, degrees, m/s², and degrees/second. Firmware converts its internal mph and acceleration-in-g readings before sending them.
+
+An armed server response must contain `session_id`, `sequence`, `generation`, and integer `steering` and `throttle` values from -100 to 100. The firmware syncs every 100 ms during remote control and refreshes the 500 ms vehicle watchdog only after a valid armed response. A changed session or generation, a decreasing sequence, an HTTP failure, malformed JSON, authentication rejection, or Wi-Fi loss immediately neutralizes the outputs and restores receiver mode. A subsequent server response must be disarmed before a changed remote generation can be accepted.
+
+Local and remote clients have separate ownership. A remote response cannot take over an active local session, and local command routes reject commands while the remote controller owns PWM. Stop remains available from either path.
+
+The configured URL uses plaintext HTTP. Use it only for disconnected-actuator development; deploy OrcasMakers behind HTTPS and change `CAR_REMOTE_SYNC_URL` before real vehicle control.
+
 ## API examples
 
 The browser and API connect directly on the trusted local network without a pairing token:
@@ -77,6 +98,12 @@ curl http://192.168.4.1/api/v1/state
 curl -N http://192.168.4.1/api/v1/events
 curl -X POST -H 'Content-Type: application/json' \
   -d '{}' http://192.168.4.1/api/v1/control/arm
+curl -X POST -H 'Content-Type: application/json' \
+  -d '{"display":{"scale_percent":75,"offset_x_px":30,"offset_y_px":17}}' \
+  http://192.168.4.1/api/v1/settings
+curl -X POST -H 'Content-Type: application/json' \
+  -d '{"display":{"colors":{"primary":"#6EE7FF","accent":"#FF4D6D"}}}' \
+  http://192.168.4.1/api/v1/settings
 ```
 
 Use the `session_id` from the arm response in ordered commands:
@@ -90,6 +117,8 @@ curl -X POST http://192.168.4.1/api/v1/control/stop
 
 The complete contract is [docs/openapi.yaml](docs/openapi.yaml).
 
+The dashboard settings page can scale the complete TFT gauge frame from 50% to 100%, position it by its top-left X/Y pixel coordinates, and customize the shared gauge, text, gear, indicator, warning, and dashboard-background colors. Display settings are stored in ESP32 Preferences and restored after reboot. Colors use `#RRGGBB` values in the API and are converted to RGB565 for the TFT; unused screen space outside a scaled dashboard remains black.
+
 ## Repository layout
 
 ```text
@@ -102,6 +131,7 @@ dashboard/                         Main integrated firmware sketch
   browser_audio.ino               LittleFS WAV upload, validation, and playback
   speaker_audio.ino               I2S output configuration
   horn_synth.ino                  Real-time synthesized horn task
+  remote.ino                      OrcasMakers telemetry and command relay client
 utils/                             Standalone experiments and hardware diagnostics
   BrowserVideoToTDisplay/         Browser-to-TFT JPEG/WebSocket experiment
   bluetoothSpeaker/               Bluetooth A2DP speaker experiment
@@ -114,7 +144,8 @@ The utility sketches are independent programs; they are not compiled into the da
 
 ## Current limitations
 
-- HTTP has no transport encryption or application authentication; use only the WPA2-protected access point or another trusted local network.
+- Local HTTP has no transport encryption or application authentication; use only the WPA2-protected access point or another trusted local network.
+- The default OrcasMakers URL is plaintext HTTP. Remote driving requires HTTPS before production use.
 - The aggregate state includes a temporary deprecated `legacy` view for the diagnostics UI.
 - Pin assignments, pulse endpoints, AP credentials, and most timing constants are compiled into the firmware.
 - Fuel level, odometer, and some gauge state are placeholders rather than physical sensor inputs.

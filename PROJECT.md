@@ -10,6 +10,7 @@ GPS UART ───────TinyGPS++─────────┤
 IMU + BME280 ───I2C───────────────┼── shared firmware state ── TFT renderer
                                   │                         └── `/api/v1` JSON + SSE
 Browser controller ──HTTP POST────┴── mode switch ── LEDC PWM ── steering/throttle
+OrcasMakers relay ⇄ outbound HTTP sync ┘
 Browser WAV ──HTTP upload──LittleFS──I2S ── amplifier/speaker
 RC/web horn request ──synth task─────I2S ── amplifier/speaker
 ```
@@ -47,7 +48,7 @@ The TFT pins are supplied by the installed `TFT_eSPI` board configuration and ar
 6. Starts I2C, probes the LSM6DSOX and BME280 (addresses `0x76`, then `0x77`), and starts GPS UART1.
 7. Registers asynchronous HTTP/SSE routes, starts the server, and renders the screen.
 
-The cooperative `loop()` updates pulse inputs, horn requests, the control watchdog, receiver-derived dashboard state, turn outputs, 4 Hz SSE publication, audio, GPS, IMU, speed fusion, one-second environment samples, 500 ms blinking, and 50 ms TFT rendering. HTTP request processing runs asynchronously. A 2 ms delay is used when audio is idle.
+The cooperative `loop()` updates pulse inputs, horn requests, the control watchdog, receiver-derived dashboard state, turn outputs, 4 Hz SSE publication, audio, GPS, IMU, speed fusion, one-second environment samples, 500 ms blinking, and 50 ms TFT rendering. The TFT renderer draws into a fixed 240×135 8-bit sprite; at display scales below 100%, it nearest-neighbor samples that completed frame into reusable scanlines and places the result at the configured X/Y offset. HTTP request processing runs asynchronously. A 2 ms delay is used when audio is idle.
 
 ## Sensor and input acquisition
 
@@ -205,10 +206,14 @@ The separate short-horn endpoint triggers a timed request when the selected mode
 ESP32 Preferences stores:
 
 - steering center/left/right pulse calibration and turn threshold
-- dashboard brightness and tilt-related settings
+- dashboard brightness, 50–100% TFT scale, X/Y pixel position, 24-bit color theme, and tilt-related settings
 - station Wi-Fi SSID and password
 
 At boot, the device always creates the WPA2 access point `CarRadio` / `carradio123` and also uses station mode when credentials exist (`WIFI_AP_STA`). The AP normally appears at `192.168.4.1`. Browser and API requests connect directly without a pairing token. Traffic is unauthenticated plaintext and must remain on the WPA2-protected access point or another trusted local network; it must not be exposed directly to the internet.
+
+When `CAR_REMOTE_DEVICE_TOKEN` is defined, the station connection posts OrcasMakers protocol-version-1 telemetry to the device-sync endpoint. The strict flat payload converts dashboard and GPS speeds from mph to km/h, RPM from thousands to revolutions/minute, fuel to percent, and accelerometer readings from g to m/s². The response carries the current remote command. Idle synchronization runs every 400 ms and remote control runs every 100 ms; failures back off from 500 ms to 10 seconds. An armed response must have a stable non-empty session ID and generation, a non-decreasing sequence, and integer controls within -100 to 100. Any invalid or failed sync immediately neutralizes remote output; only a valid response refreshes the independent 500 ms watchdog. The default empty token disables all outbound relay requests.
+
+Vehicle web mode has explicit `local` or `remote` ownership. Neither source may arm over the other, while the public Stop routes can always restore receiver mode. The default relay URL is plaintext HTTP for initial development and must be replaced with an HTTPS endpoint before operating connected drive hardware.
 
 ## File responsibilities
 
@@ -220,6 +225,7 @@ At boot, the device always creates the WPA2 access point `CarRadio` / `carradio1
 - `dashboard/browser_audio.ino`: LittleFS lifecycle, WAV parsing/upload, volume, and incremental playback.
 - `dashboard/speaker_audio.ino`: shared AudioTools I2S configuration and pin-conflict checks.
 - `dashboard/horn_synth.ino`: horn waveform, envelope/state machine, synchronization, and real-time audio task.
+- `dashboard/remote.ino`: authenticated outbound OrcasMakers telemetry sync, remote command validation, retry state, and relay diagnostics.
 
 `utils/` holds standalone prototypes. They are useful for validating individual hardware paths but may use different pins from the integrated sketch. In particular, the video utility is the only code here that uses a WebSocket; that must not be confused with production vehicle control.
 
@@ -232,6 +238,7 @@ At boot, the device always creates the WPA2 access point `CarRadio` / `carradio1
 - Any change to controller cadence must remain comfortably below the 500 ms watchdog timeout, including realistic Wi-Fi latency.
 - Treat pulse calibration changes as control changes: web mode immediately recomputes the active command after valid calibration updates.
 - Large embedded HTML and manually concatenated JSON consume heap. Watch free memory if adding UI/state fields.
+- Dashboard color settings are stored as 24-bit RGB values and exposed as `#RRGGBB`; the renderer converts them to RGB565 without changing the persisted/API values.
 - Utility sketches should be compiled separately and should not be copied into `dashboard/` unless intended to become part of the production translation unit.
 
 ## Suggested validation checklist

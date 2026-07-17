@@ -1,0 +1,22 @@
+22:01:13.671 > ets Jun  8 2016 00:22:57
+22:01:13.672 > 
+22:01:13.672 > rst:0x1 (POWERON_RESET),boot:0x13 (SPI_FAST_FLASH_BOOT)
+22:01:13.672 > configsip: 0, SPIWP:0xee
+22:01:13.672 > clk_drv:0x00,q_drv:0x00,d_drv:0x00,cs0_drv:0x00,hd_drv:0x00,wp_drv:0x00
+22:01:13.682 > mode:DIO, clock div:1
+22:01:13.682 > load:0x3fff0030,len:4876
+22:01:13.682 > ho 0 tail 12 room 4
+22:01:13.682 > load:0x40078000,len:16560
+22:01:13.688 > load:0x40080400,len:3500
+22:01:13.688 > entry 0x400805b4
+22:01:14.727 > E (593) esp_littlefs: partition "spiffs" could not be found
+22:01:14.727 > E (593) esp_littlefs: Failed to initialize LittleFS
+22:01:14.727 > LittleFS mount failed; browser audio storage unavailable
+22:01:14.738 > [W] I2SESP32V1.h : 244 - Using channel_format: I2SChannelSelect::Left for mono
+22:01:14.747 > Speaker I2S pins: LRC 13, BCLK 17, DIN 15
+22:01:14.747 > Speaker I2S format: 22050 Hz, 16-bit, 1 channel
+22:01:14.854 > AP IP address: 192.168.4.1
+22:01:14.854 > Connecting station WiFi to Center
+22:01:14.854 > IMU online
+22:01:14.989 > BME280 online at 0x76
+22:01:14.990 > GPS serial started on RX 27
